@@ -119,6 +119,8 @@ class Rotina(db.Model):
             'atividade_nome': self.atividade.nome if self.atividade else None,
             'atividade_descricao': self.atividade.descricao if self.atividade else None,
             'atividade_obrigatoria': self.atividade.obrigatoria if self.atividade else False,
+            'tipo_evidencia': self.atividade.tipo_evidencia if self.atividade else None,
+            'indicador': self.atividade.indicador if self.atividade else None,
             'perfil': self.atividade.perfil if self.atividade else None,
             'periodo_inicio': self.periodo_inicio.isoformat() if self.periodo_inicio else None,
             'periodo_fim': self.periodo_fim.isoformat() if self.periodo_fim else None,
@@ -156,6 +158,30 @@ class Evidencia(db.Model):
         }
 
 
+class AuditLog(db.Model):
+    __tablename__ = 'audit_logs'
+    id = db.Column(db.Integer, primary_key=True)
+    entidade = db.Column(db.String(100), nullable=False)
+    entidade_id = db.Column(db.String(50))
+    acao = db.Column(db.String(50), nullable=False)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    detalhes = db.Column(db.Text)
+    criado_em = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    usuario = db.relationship('Usuario', lazy=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'entidade': self.entidade,
+            'entidade_id': self.entidade_id,
+            'acao': self.acao,
+            'usuario_id': self.usuario_id,
+            'usuario_nome': self.usuario.nome if self.usuario else None,
+            'detalhes': self.detalhes,
+            'criado_em': self.criado_em.isoformat() if self.criado_em else None
+        }
+
+
 class HistoricoRotina(db.Model):
     __tablename__ = 'historico_rotinas'
     id = db.Column(db.Integer, primary_key=True)
@@ -166,11 +192,14 @@ class HistoricoRotina(db.Model):
     status_novo = db.Column(db.String(30))
     observacao = db.Column(db.Text)
     criado_em = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    usuario = db.relationship('Usuario', lazy=True)
 
     def to_dict(self):
         return {
             'id': self.id,
             'rotina_id': self.rotina_id,
+            'usuario_id': self.usuario_id,
+            'usuario_nome': self.usuario.nome if self.usuario else None,
             'acao': self.acao,
             'status_anterior': self.status_anterior,
             'status_novo': self.status_novo,

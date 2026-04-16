@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from backend.audit import log_audit, diff_payload
 from backend.models import Usuario
 from backend.constants import PERFIS_USUARIO
 from backend.extensions import db
@@ -80,6 +81,8 @@ def criar():
     u.set_senha(data.get('senha', '123456'))
     db.session.add(u)
     db.session.commit()
+    log_audit(me.id, 'usuario', u.id, 'criar', u.to_dict())
+    db.session.commit()
     return jsonify(u.to_dict()), 201
 
 
@@ -91,6 +94,7 @@ def atualizar(uid):
         return jsonify({'erro': 'Acesso negado'}), 403
 
     u = Usuario.query.get_or_404(uid)
+    before = u.to_dict()
     data = request.get_json()
 
     if 'nome' in data:
@@ -110,6 +114,12 @@ def atualizar(uid):
     if 'senha' in data and require_admin(me):
         u.set_senha(data['senha'])
 
+    after = u.to_dict()
+    mudancas = diff_payload(before, after)
+    if 'senha' in data and require_admin(me):
+        mudancas['senha'] = {'antes': '***', 'depois': '***'}
+    if mudancas:
+        log_audit(me.id, 'usuario', u.id, 'atualizar', mudancas)
     db.session.commit()
     return jsonify(u.to_dict())
 
@@ -122,5 +132,6 @@ def deletar(uid):
         return jsonify({'erro': 'Acesso negado'}), 403
     u = Usuario.query.get_or_404(uid)
     u.status = 'inativo'
+    log_audit(me.id, 'usuario', u.id, 'excluir', {'status': 'inativo', 'email': u.email})
     db.session.commit()
     return jsonify({'mensagem': 'Usuário inativado'})

@@ -5,7 +5,8 @@ let token = localStorage.getItem('gc_token') || null;
 
 // ── AUTH ──
 async function apiFetch(path, opts = {}) {
-  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  const isFormData = opts.body instanceof FormData;
+  const headers = { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), ...(opts.headers || {}) };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(API + path, { ...opts, headers });
   if (res.status === 401) { logout(); return null; }
@@ -44,6 +45,39 @@ function toast(msg, type = 'info') {
   el.textContent = msg;
   c.appendChild(el);
   setTimeout(() => el.remove(), 3500);
+}
+
+async function downloadExport(path, filename) {
+  const headers = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(API + path, { headers });
+  if (!res.ok) {
+    toast('Erro ao exportar relatório', 'error');
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function downloadCsvFromRows(filename, headers, rows) {
+  const escape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const csv = [headers.map(escape).join(','), ...rows.map(row => row.map(escape).join(','))].join('\n');
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 // ── NAVIGATION ──
@@ -215,6 +249,7 @@ async function loadDashboard() {
         <option value="mensal" ${periodo==='mensal'?'selected':''}>Mensal</option>
       </select>
       ${regionalFilter}
+      <button class="btn btn-secondary btn-sm" onclick="exportDashboard()">Exportar CSV</button>
       <span class="text-muted" style="font-size:.8rem">
         ${fmtDate(d.periodo_inicio)} → ${fmtDate(d.periodo_fim)}
       </span>
@@ -325,6 +360,14 @@ async function gerarRotinas() {
   }
 }
 
+function exportDashboard() {
+  const periodo = document.getElementById('dash-periodo')?.value || 'semanal';
+  const regionalId = document.getElementById('dash-regional')?.value || '';
+  let url = `/api/rotinas/dashboard/export?periodo=${periodo}`;
+  if (regionalId) url += `&regional_id=${regionalId}`;
+  downloadExport(url, `dashboard_${periodo}.csv`);
+}
+
 // ══════════════════════════════════════
 // ── ROTINAS ──
 // ══════════════════════════════════════
@@ -338,10 +381,14 @@ async function loadRotinas() {
   let url = `/api/rotinas/?periodo=${periodo}&usuario_id=${currentUser.id}`;
   if (status) url += `&status=${status}`;
 
-  const r = await apiFetch(url);
+  const [r, aderenciaResp] = await Promise.all([
+    apiFetch(url),
+    apiFetch(`/api/rotinas/minha-aderencia?periodo=${periodo}`)
+  ]);
   if (!r || !r.ok) { wrap.innerHTML = '<p class="text-muted">Erro ao carregar rotinas.</p>'; return; }
 
   const rotinas = r.data;
+  const aderencia = aderenciaResp?.ok ? aderenciaResp.data : { percentual_execucao: 0, concluidas: 0, total: 0 };
 
   wrap.innerHTML = `
     <div class="analytics-page">
@@ -358,6 +405,17 @@ async function loadRotinas() {
         <option value="concluida">Concluída</option>
         <option value="nao_realizada">Não Realizada</option>
       </select>
+      <button class="btn btn-secondary btn-sm" onclick="exportRotinas()">Exportar CSV</button>
+    </div>
+    <div class="stats-grid" style="grid-template-columns:1fr">
+      <div class="stat-card">
+        <div class="stat-label">Aderência Pessoal</div>
+        <div class="stat-value" style="color:var(--vinho)">${aderencia.percentual_execucao}%</div>
+        <div class="stat-sub">${aderencia.concluidas} de ${aderencia.total} atividades concluídas no período</div>
+        <div class="progress-bar">
+          <div class="progress-fill" style="width:${aderencia.percentual_execucao}%"></div>
+        </div>
+      </div>
     </div>
     <div>
     ${rotinas.length === 0
@@ -391,12 +449,15 @@ function renderRotinaCard(r) {
 }
 
 async function openRotinaModal(id) {
-  const r = await apiFetch(`/api/rotinas/${id}`);
+  const [r, historicoResp] = await Promise.all([
+    apiFetch(`/api/rotinas/${id}`),
+    apiFetch(`/api/rotinas/${id}/historico`)
+  ]);
   if (!r || !r.ok) return;
   const rotina = r.data;
+  const historico = historicoResp?.ok ? historicoResp.data : [];
 
-  const canEdit = currentUser.perfil === 'admin' || rotina.usuario_id === currentUser.id ||
-    (currentUser.perfil === 'sr' && rotina.perfil);
+  const canEdit = currentUser.perfil === 'admin' || rotina.usuario_id === currentUser.id || currentUser.perfil === 'sr';
 
   document.getElementById('rotina-modal-title').textContent = rotina.atividade_nome;
   document.getElementById('rotina-modal-body').innerHTML = `
@@ -405,7 +466,7 @@ async function openRotinaModal(id) {
       <div><div class="form-label">Periodicidade</div><span class="badge badge-${rotina.periodicidade}">${PERIODO_LABELS[rotina.periodicidade]}</span></div>
       <div><div class="form-label">Período</div><span style="font-size:.875rem">${fmtDate(rotina.periodo_inicio)} → ${fmtDate(rotina.periodo_fim)}</span></div>
       <div><div class="form-label">Usuário</div><span style="font-size:.875rem">${rotina.usuario_nome}</span></div>
-      <div><div class="form-label">Tipo de Evidência</div><span style="font-size:.8rem;color:var(--cinza)">${rotina.atividade_descricao || '—'}</span></div>
+      <div><div class="form-label">Tipo de Evidência</div><span style="font-size:.8rem;color:var(--cinza)">${rotina.tipo_evidencia || '—'}</span></div>
     </div>
 
     <div class="form-group">
@@ -433,6 +494,30 @@ async function openRotinaModal(id) {
       <textarea id="rm-acao" class="form-control" rows="2" placeholder="O que será feito para corrigir?" ${!canEdit?'disabled':''}>${rotina.acao_corretiva || ''}</textarea>
     </div>
 
+    <div id="rm-plano-wrap" class="form-grid cols-2" style="${rotina.status!=='nao_realizada'?'display:none':''}">
+      <div class="form-group">
+        <label class="form-label">Responsável pela ação</label>
+        <input type="text" id="rm-responsavel" class="form-control" value="${rotina.responsavel_acao || ''}" ${!canEdit?'disabled':''}>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Novo prazo</label>
+        <input type="date" id="rm-novo-prazo" class="form-control" value="${rotina.novo_prazo || ''}" ${!canEdit?'disabled':''}>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+    <h4 style="font-size:.9rem;font-weight:700;margin-bottom:.75rem">Evidências e anexos</h4>
+    <div id="rm-evidencias-list">${renderEvidencias(rotina, canEdit)}</div>
+    ${canEdit ? `
+    <div class="form-group mt-2">
+      <input type="file" id="rm-evidencia-arquivo" class="form-control">
+    </div>
+    <button class="btn btn-secondary btn-sm" type="button" onclick="uploadEvidencia(${rotina.id})">Anexar Evidência</button>` : ''}
+
+    <div class="divider"></div>
+    <h4 style="font-size:.9rem;font-weight:700;margin-bottom:.75rem">Histórico e auditoria</h4>
+    <div id="rm-historico-list">${renderHistoricoRotina(historico)}</div>
+
     ${rotina.data_conclusao ? `<div class="alert alert-success" style="margin-top:.5rem">Concluída em ${fmtDatetime(rotina.data_conclusao)}</div>` : ''}
   `;
 
@@ -442,6 +527,8 @@ async function openRotinaModal(id) {
     document.getElementById('rm-justificativa-wrap').style.display =
       (s === 'nao_realizada' || s === 'em_andamento') ? '' : 'none';
     document.getElementById('rm-acao-wrap').style.display =
+      s === 'nao_realizada' ? '' : 'none';
+    document.getElementById('rm-plano-wrap').style.display =
       s === 'nao_realizada' ? '' : 'none';
   });
 
@@ -455,8 +542,14 @@ async function saveRotina() {
     status: document.getElementById('rm-status').value,
     comentario: document.getElementById('rm-comentario').value,
     justificativa: document.getElementById('rm-justificativa')?.value || '',
-    acao_corretiva: document.getElementById('rm-acao')?.value || ''
+    acao_corretiva: document.getElementById('rm-acao')?.value || '',
+    responsavel_acao: document.getElementById('rm-responsavel')?.value || '',
+    novo_prazo: document.getElementById('rm-novo-prazo')?.value || null
   };
+  if (payload.status === 'nao_realizada' && (!payload.justificativa || !payload.acao_corretiva)) {
+    toast('Preencha a justificativa e o plano de ação', 'error');
+    return;
+  }
   const r = await apiFetch(`/api/rotinas/${id}`, {
     method: 'PUT', body: JSON.stringify(payload)
   });
@@ -464,10 +557,67 @@ async function saveRotina() {
     toast('Rotina atualizada!', 'success');
     closeModal('rotina-modal');
     loadRotinas();
-    loadDashboard();
+    if (['admin', 'sr'].includes(currentUser.perfil)) loadDashboard();
   } else {
     toast('Erro ao salvar', 'error');
   }
+}
+
+function renderEvidencias(rotina, canEdit) {
+  if (!rotina.evidencias?.length) return '<p class="text-muted">Nenhuma evidência anexada.</p>';
+  return rotina.evidencias.map(e => `
+    <div class="chip" style="justify-content:space-between;width:100%;margin-bottom:.5rem">
+      <a href="${e.url}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis">${e.nome_arquivo}</a>
+      ${canEdit ? `<button class="btn btn-ghost btn-sm" type="button" onclick="deleteEvidencia(${e.id}, ${rotina.id})">Excluir</button>` : ''}
+    </div>
+  `).join('');
+}
+
+function renderHistoricoRotina(historico) {
+  if (!historico?.length) return '<p class="text-muted">Nenhum histórico registrado.</p>';
+  return historico.map(h => `
+    <div style="padding:.65rem 0;border-bottom:1px solid #F0F0F0">
+      <div style="font-size:.8rem;font-weight:600">${(h.acao || '').replace(/_/g, ' ')}</div>
+      <div style="font-size:.75rem;color:var(--cinza-light)">${h.usuario_nome || 'Sistema'} · ${fmtDatetime(h.criado_em)}</div>
+      <div style="font-size:.78rem;color:var(--cinza)">${h.observacao || 'Sem observações'}</div>
+    </div>
+  `).join('');
+}
+
+async function uploadEvidencia(rotinaId) {
+  const arquivo = document.getElementById('rm-evidencia-arquivo')?.files?.[0];
+  if (!arquivo) {
+    toast('Selecione um arquivo para anexar', 'error');
+    return;
+  }
+  const form = new FormData();
+  form.append('arquivo', arquivo);
+  const r = await apiFetch(`/api/rotinas/${rotinaId}/evidencias`, { method: 'POST', body: form });
+  if (r && r.ok) {
+    toast('Evidência anexada!', 'success');
+    openRotinaModal(rotinaId);
+  } else {
+    toast(r?.data?.erro || 'Erro ao anexar evidência', 'error');
+  }
+}
+
+async function deleteEvidencia(eid, rotinaId) {
+  if (!confirm('Deseja remover esta evidência?')) return;
+  const r = await apiFetch(`/api/rotinas/evidencias/${eid}`, { method: 'DELETE' });
+  if (r && r.ok) {
+    toast('Evidência removida!', 'success');
+    openRotinaModal(rotinaId);
+  } else {
+    toast(r?.data?.erro || 'Erro ao remover evidência', 'error');
+  }
+}
+
+function exportRotinas() {
+  const periodo = document.getElementById('rotinas-periodo')?.value || 'semanal';
+  const status = document.getElementById('rotinas-status')?.value || '';
+  let url = `/api/rotinas/export?periodo=${periodo}`;
+  if (status) url += `&status=${status}`;
+  downloadExport(url, `rotinas_${periodo}.csv`);
 }
 
 // ══════════════════════════════════════
@@ -511,6 +661,7 @@ async function loadAcompanhamento() {
         <option value="concluida">Concluída</option>
         <option value="nao_realizada">Não Realizada</option>
       </select>
+      <button class="btn btn-secondary btn-sm" onclick="exportAcompanhamento()">Exportar CSV</button>
     </div>
 
     <div class="card">
@@ -546,6 +697,16 @@ async function loadAcompanhamento() {
       </div>
     </div>
     </div>`;
+}
+
+function exportAcompanhamento() {
+  const periodo = document.getElementById('acomp-periodo')?.value || 'semanal';
+  const usuarioId = document.getElementById('acomp-usuario')?.value || '';
+  const status = document.getElementById('acomp-status')?.value || '';
+  let url = `/api/rotinas/export?periodo=${periodo}`;
+  if (usuarioId) url += `&usuario_id=${usuarioId}`;
+  if (status) url += `&status=${status}`;
+  downloadExport(url, `acompanhamento_${periodo}.csv`);
 }
 
 // ══════════════════════════════════════
@@ -620,6 +781,7 @@ async function loadUsuarios() {
           <td style="display:flex;gap:.25rem">
             <button class="btn btn-ghost btn-sm btn-icon" onclick="openUsuarioModal(${JSON.stringify(u).replace(/"/g,'&quot;')})" title="Editar">Editar</button>
             <button class="btn btn-ghost btn-sm btn-icon" onclick="toggleUsuarioStatus(${u.id},'${u.status}')" title="Alterar status">Status</button>
+            <button class="btn btn-ghost btn-sm btn-icon" onclick="deleteUsuario(${u.id})" title="Excluir">Excluir</button>
           </td>
         </tr>`).join('')}
       </tbody>
@@ -715,6 +877,17 @@ async function toggleUsuarioStatus(id, statusAtual) {
   else toast('Erro ao alterar status', 'error');
 }
 
+async function deleteUsuario(id) {
+  if (!confirm('Deseja inativar este usuário?')) return;
+  const r = await apiFetch(`/api/usuarios/${id}`, { method: 'DELETE' });
+  if (r && r.ok) {
+    toast('Usuário inativado!', 'success');
+    loadUsuarios();
+  } else {
+    toast(r?.data?.erro || 'Erro ao excluir usuário', 'error');
+  }
+}
+
 // ══════════════════════════════════════
 // ── REGIONAIS ──
 // ══════════════════════════════════════
@@ -740,6 +913,7 @@ async function loadRegionais() {
           <td style="display:flex;gap:.25rem">
             <button class="btn btn-ghost btn-sm btn-icon" onclick="openRegionalModal(${JSON.stringify(r).replace(/"/g,'&quot;')})" title="Editar">Editar</button>
             <button class="btn btn-ghost btn-sm btn-icon" onclick="toggleRegional(${r.id},${r.ativo})" title="Alterar status">Status</button>
+            <button class="btn btn-ghost btn-sm btn-icon" onclick="deleteRegional(${r.id})" title="Excluir">Excluir</button>
           </td>
         </tr>`).join('')}
       </tbody>
@@ -793,6 +967,17 @@ async function toggleRegional(id, ativo) {
   if (r && r.ok) { toast('Status alterado', 'success'); loadRegionais(); }
 }
 
+async function deleteRegional(id) {
+  if (!confirm('Deseja inativar esta regional?')) return;
+  const r = await apiFetch(`/api/regionais/${id}`, { method: 'DELETE' });
+  if (r && r.ok) {
+    toast('Regional inativada!', 'success');
+    loadRegionais();
+  } else {
+    toast(r?.data?.erro || 'Erro ao excluir regional', 'error');
+  }
+}
+
 // ══════════════════════════════════════
 // ── ATIVIDADES CATÁLOGO ──
 // ══════════════════════════════════════
@@ -825,6 +1010,7 @@ async function loadAtividades() {
         <option value="mensal">Mensal</option>
       </select>
       <button class="btn btn-primary btn-sm" onclick="openAtividadeModal()">+ Nova Atividade</button>
+      <button class="btn btn-secondary btn-sm" onclick="exportAtividades()">Exportar CSV</button>
     </div>
     <div class="card"><div class="card-body" style="padding:0"><div class="table-wrap"><table>
       <thead><tr><th>#</th><th>Nome</th><th>Perfil</th><th>Periodicidade</th><th>Obrigatória</th><th>Evidência</th><th>Ações</th></tr></thead>
@@ -836,7 +1022,10 @@ async function loadAtividades() {
           <td><span class="badge badge-${a.periodicidade}">${PERIODO_LABELS[a.periodicidade]}</span></td>
           <td>${a.obrigatoria ? 'Sim' : 'Não'}</td>
           <td style="font-size:.8rem;color:var(--cinza)">${a.tipo_evidencia||'—'}</td>
-          <td><button class="btn btn-ghost btn-sm btn-icon" onclick="openAtividadeModal(${JSON.stringify(a).replace(/"/g,'&quot;')})" title="Editar">Editar</button></td>
+          <td style="display:flex;gap:.25rem">
+            <button class="btn btn-ghost btn-sm btn-icon" onclick="openAtividadeModal(${JSON.stringify(a).replace(/"/g,'&quot;')})" title="Editar">Editar</button>
+            <button class="btn btn-ghost btn-sm btn-icon" onclick="deleteAtividade(${a.id})" title="Excluir">Excluir</button>
+          </td>
         </tr>`).join('')}
       </tbody>
     </table></div></div></div>
@@ -901,6 +1090,40 @@ async function saveAtividade() {
     loadAtividades();
   } else {
     toast(r?.data?.erro || 'Erro ao salvar', 'error');
+  }
+}
+
+async function exportAtividades() {
+  const perfil = document.getElementById('at-perfil')?.value || '';
+  const periodo = document.getElementById('at-periodo')?.value || '';
+  let url = '/api/atividades/?ativo=true';
+  if (perfil) url += `&perfil=${perfil}`;
+  if (periodo) url += `&periodicidade=${periodo}`;
+  const r = await apiFetch(url);
+  if (!r || !r.ok) {
+    toast('Erro ao exportar atividades', 'error');
+    return;
+  }
+  const rows = r.data.map(a => [
+    a.ordem,
+    a.nome,
+    PERFIL_LABELS[a.perfil] || a.perfil,
+    PERIODO_LABELS[a.periodicidade] || a.periodicidade,
+    a.obrigatoria ? 'Sim' : 'Não',
+    a.tipo_evidencia || '',
+    a.indicador || ''
+  ]);
+  downloadCsvFromRows('catalogo_atividades.csv', ['Ordem', 'Nome', 'Perfil', 'Periodicidade', 'Obrigatória', 'Tipo Evidência', 'Indicador'], rows);
+}
+
+async function deleteAtividade(id) {
+  if (!confirm('Deseja inativar esta atividade?')) return;
+  const r = await apiFetch(`/api/atividades/${id}`, { method: 'DELETE' });
+  if (r && r.ok) {
+    toast('Atividade inativada!', 'success');
+    loadAtividades();
+  } else {
+    toast(r?.data?.erro || 'Erro ao excluir atividade', 'error');
   }
 }
 

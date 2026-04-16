@@ -1,6 +1,12 @@
-from flask import Blueprint, request, jsonify
+import csv
+import io
+import os
+import uuid
+from flask import Blueprint, request, jsonify, current_app, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from backend.models import Rotina, AtividadeCatalogo, Usuario, HistoricoRotina
+from werkzeug.utils import secure_filename
+from backend.audit import log_audit
+from backend.models import Rotina, AtividadeCatalogo, Usuario, HistoricoRotina, Evidencia, AuditLog
 from backend.extensions import db
 from datetime import date, timedelta, datetime, timezone
 from dateutil.relativedelta import relativedelta
@@ -11,6 +17,31 @@ rotinas_bp = Blueprint('rotinas', __name__)
 def get_current_user():
     uid = int(get_jwt_identity())
     return Usuario.query.get_or_404(uid)
+
+
+def can_access_rotina(me, rotina):
+    if me.perfil == 'admin':
+        return True
+    if me.perfil == 'sr':
+        return rotina.usuario and rotina.usuario.regional_id == me.regional_id
+    return rotina.usuario_id == me.id
+
+
+def add_rotina_history(rotina, usuario_id, acao, observacao=None, status_anterior=None, status_novo=None):
+    hist = HistoricoRotina(
+        rotina_id=rotina.id,
+        usuario_id=usuario_id,
+        acao=acao,
+        status_anterior=status_anterior,
+        status_novo=status_novo,
+        observacao=observacao
+    )
+    db.session.add(hist)
+
+
+def allowed_file(filename):
+    extensoes = {'pdf', 'png', 'jpg', 'jpeg', 'webp', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'txt'}
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in extensoes
 
 
 def get_periodo(tipo, referencia=None):
@@ -124,7 +155,7 @@ def listar():
 def obter(rid):
     me = get_current_user()
     r = Rotina.query.get_or_404(rid)
-    if me.perfil not in ['admin', 'sr'] and r.usuario_id != me.id:
+    if not can_access_rotina(me, r):
         return jsonify({'erro': 'Acesso negado'}), 403
     return jsonify(r.to_dict())
 
@@ -135,7 +166,7 @@ def atualizar(rid):
     me = get_current_user()
     r = Rotina.query.get_or_404(rid)
 
-    if me.perfil not in ['admin', 'sr'] and r.usuario_id != me.id:
+    if not can_access_rotina(me, r):
         return jsonify({'erro': 'Acesso negado'}), 403
 
     data = request.get_json()
@@ -159,19 +190,214 @@ def atualizar(rid):
     if 'responsavel_acao' in data:
         r.responsavel_acao = data['responsavel_acao']
 
+    if r.status == 'nao_realizada' and (not r.justificativa or not r.acao_corretiva):
+        return jsonify({'erro': 'Justificativa e plano de ação são obrigatórios para atividades não realizadas'}), 400
+
     if status_anterior != r.status:
-        hist = HistoricoRotina(
-            rotina_id=r.id,
-            usuario_id=me.id,
-            acao='mudanca_status',
+        add_rotina_history(
+            r,
+            me.id,
+            'mudanca_status',
+            observacao=data.get('comentario'),
             status_anterior=status_anterior,
-            status_novo=r.status,
-            observacao=data.get('comentario')
+            status_novo=r.status
         )
-        db.session.add(hist)
+
+    if any(chave in data for chave in ['comentario', 'justificativa', 'acao_corretiva', 'novo_prazo', 'responsavel_acao']):
+        add_rotina_history(
+            r,
+            me.id,
+            'atualizacao_rotina',
+            observacao=data.get('comentario') or data.get('justificativa') or 'Campos complementares atualizados',
+            status_anterior=status_anterior,
+            status_novo=r.status
+        )
+
+    log_audit(me.id, 'rotina', r.id, 'atualizar', {
+        'status': r.status,
+        'comentario': r.comentario,
+        'justificativa': r.justificativa,
+        'acao_corretiva': r.acao_corretiva,
+        'novo_prazo': r.novo_prazo,
+        'responsavel_acao': r.responsavel_acao
+    })
 
     db.session.commit()
     return jsonify(r.to_dict())
+
+
+@rotinas_bp.route('/<int:rid>/evidencias', methods=['POST'])
+@jwt_required()
+def upload_evidencia(rid):
+    me = get_current_user()
+    rotina = Rotina.query.get_or_404(rid)
+    if not can_access_rotina(me, rotina):
+        return jsonify({'erro': 'Acesso negado'}), 403
+
+    arquivo = request.files.get('arquivo')
+    if not arquivo or not arquivo.filename:
+        return jsonify({'erro': 'Arquivo é obrigatório'}), 400
+    if not allowed_file(arquivo.filename):
+        return jsonify({'erro': 'Tipo de arquivo não permitido'}), 400
+
+    nome_seguro = secure_filename(arquivo.filename)
+    nome_final = f"{rotina.id}_{uuid.uuid4().hex}_{nome_seguro}"
+    caminho = os.path.join(current_app.config['UPLOAD_FOLDER'], nome_final)
+    arquivo.save(caminho)
+
+    evidencia = Evidencia(
+        rotina_id=rotina.id,
+        nome_arquivo=arquivo.filename,
+        url=f"/uploads/{nome_final}",
+        tipo=arquivo.mimetype or 'arquivo'
+    )
+    db.session.add(evidencia)
+    db.session.flush()
+    add_rotina_history(rotina, me.id, 'anexo_evidencia', observacao=arquivo.filename, status_anterior=rotina.status, status_novo=rotina.status)
+    log_audit(me.id, 'evidencia', evidencia.id, 'criar', {'rotina_id': rotina.id, 'arquivo': arquivo.filename})
+    db.session.commit()
+    return jsonify(evidencia.to_dict()), 201
+
+
+@rotinas_bp.route('/evidencias/<int:eid>', methods=['DELETE'])
+@jwt_required()
+def deletar_evidencia(eid):
+    me = get_current_user()
+    evidencia = Evidencia.query.get_or_404(eid)
+    rotina = Rotina.query.get_or_404(evidencia.rotina_id)
+    if not can_access_rotina(me, rotina):
+        return jsonify({'erro': 'Acesso negado'}), 403
+
+    if evidencia.url and evidencia.url.startswith('/uploads/'):
+        caminho = os.path.join(current_app.config['UPLOAD_FOLDER'], evidencia.url.split('/uploads/', 1)[1])
+        if os.path.exists(caminho):
+            os.remove(caminho)
+
+    nome = evidencia.nome_arquivo
+    db.session.delete(evidencia)
+    add_rotina_history(rotina, me.id, 'remocao_evidencia', observacao=nome, status_anterior=rotina.status, status_novo=rotina.status)
+    log_audit(me.id, 'evidencia', eid, 'excluir', {'rotina_id': rotina.id, 'arquivo': nome})
+    db.session.commit()
+    return jsonify({'mensagem': 'Evidência removida'})
+
+
+@rotinas_bp.route('/<int:rid>/historico', methods=['GET'])
+@jwt_required()
+def historico_rotina(rid):
+    me = get_current_user()
+    rotina = Rotina.query.get_or_404(rid)
+    if not can_access_rotina(me, rotina):
+        return jsonify({'erro': 'Acesso negado'}), 403
+
+    historico = HistoricoRotina.query.filter_by(rotina_id=rid).order_by(HistoricoRotina.criado_em.desc()).all()
+    return jsonify([h.to_dict() for h in historico])
+
+
+@rotinas_bp.route('/audit-log', methods=['GET'])
+@jwt_required()
+def listar_auditoria():
+    me = get_current_user()
+    if me.perfil != 'admin':
+        return jsonify({'erro': 'Acesso negado'}), 403
+
+    limite = min(request.args.get('limit', 100, type=int), 500)
+    registros = AuditLog.query.order_by(AuditLog.criado_em.desc()).limit(limite).all()
+    return jsonify([r.to_dict() for r in registros])
+
+
+@rotinas_bp.route('/minha-aderencia', methods=['GET'])
+@jwt_required()
+def minha_aderencia():
+    me = get_current_user()
+    periodo = request.args.get('periodo', 'semanal')
+    data_ref = request.args.get('data_ref')
+    referencia = date.fromisoformat(data_ref) if data_ref else date.today()
+    inicio, fim = get_periodo(periodo, referencia)
+
+    rotinas = Rotina.query.filter(
+        Rotina.usuario_id == me.id,
+        Rotina.periodo_inicio >= inicio,
+        Rotina.periodo_fim <= fim
+    ).all()
+
+    total = len(rotinas)
+    concluidas = sum(1 for r in rotinas if r.status == 'concluida')
+    percentual = round((concluidas / total * 100), 1) if total else 0
+    return jsonify({
+        'periodo': periodo,
+        'periodo_inicio': inicio.isoformat(),
+        'periodo_fim': fim.isoformat(),
+        'total': total,
+        'concluidas': concluidas,
+        'percentual_execucao': percentual
+    })
+
+
+def _export_csv(nome_arquivo, cabecalho, linhas):
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(cabecalho)
+    writer.writerows(linhas)
+    mem = io.BytesIO(buffer.getvalue().encode('utf-8-sig'))
+    mem.seek(0)
+    return send_file(mem, mimetype='text/csv', as_attachment=True, download_name=nome_arquivo)
+
+
+@rotinas_bp.route('/export', methods=['GET'])
+@jwt_required()
+def exportar_rotinas():
+    me = get_current_user()
+
+    usuario_id = request.args.get('usuario_id', type=int)
+    regional_id = request.args.get('regional_id', type=int)
+    periodicidade = request.args.get('periodicidade')
+    status = request.args.get('status')
+    periodo = request.args.get('periodo', 'semanal')
+    data_ref = request.args.get('data_ref')
+    referencia = date.fromisoformat(data_ref) if data_ref else date.today()
+    inicio, fim = get_periodo(periodo, referencia)
+
+    query = Rotina.query.join(Usuario).filter(
+        Rotina.periodo_inicio >= inicio,
+        Rotina.periodo_fim <= fim
+    )
+
+    if me.perfil == 'admin':
+        if regional_id:
+            query = query.filter(Usuario.regional_id == regional_id)
+        if usuario_id:
+            query = query.filter(Rotina.usuario_id == usuario_id)
+    elif me.perfil == 'sr':
+        query = query.filter(Usuario.regional_id == me.regional_id)
+        if usuario_id:
+            query = query.filter(Rotina.usuario_id == usuario_id)
+    else:
+        query = query.filter(Rotina.usuario_id == me.id)
+
+    if periodicidade:
+        query = query.filter(Rotina.periodicidade == periodicidade)
+    if status:
+        query = query.filter(Rotina.status == status)
+
+    rotinas = query.order_by(Rotina.periodo_inicio.desc()).all()
+    linhas = [[
+        r.usuario_nome,
+        r.atividade_nome,
+        r.periodicidade,
+        r.status,
+        r.periodo_inicio.isoformat() if r.periodo_inicio else '',
+        r.periodo_fim.isoformat() if r.periodo_fim else '',
+        r.data_conclusao.isoformat() if r.data_conclusao else '',
+        r.comentario or '',
+        r.justificativa or '',
+        r.acao_corretiva or '',
+        len(r.evidencias)
+    ] for r in rotinas]
+    return _export_csv(
+        f'rotinas_{periodo}.csv',
+        ['Usuario', 'Atividade', 'Periodicidade', 'Status', 'Periodo Inicio', 'Periodo Fim', 'Conclusao', 'Comentario', 'Justificativa', 'Plano Acao', 'Qtde Evidencias'],
+        linhas
+    )
 
 
 @rotinas_bp.route('/dashboard', methods=['GET'])
@@ -287,6 +513,48 @@ def dashboard():
         'por_perfil': por_perfil,
         'ranking': ranking
     })
+
+
+@rotinas_bp.route('/dashboard/export', methods=['GET'])
+@jwt_required()
+def exportar_dashboard():
+    me = get_current_user()
+    if me.perfil not in ['admin', 'sr']:
+        return jsonify({'erro': 'Acesso negado'}), 403
+
+    regional_id = request.args.get('regional_id', type=int)
+    usuario_id = request.args.get('usuario_id', type=int)
+    periodo = request.args.get('periodo', 'semanal')
+    data_ref = request.args.get('data_ref')
+    referencia = date.fromisoformat(data_ref) if data_ref else date.today()
+    inicio, fim = get_periodo(periodo, referencia)
+
+    query = Rotina.query.join(Usuario).filter(
+        Rotina.periodo_inicio >= inicio,
+        Rotina.periodo_fim <= fim,
+        Usuario.status == 'ativo'
+    )
+    if me.perfil == 'sr':
+        query = query.filter(Usuario.regional_id == me.regional_id)
+    elif regional_id:
+        query = query.filter(Usuario.regional_id == regional_id)
+    if usuario_id:
+        query = query.filter(Rotina.usuario_id == usuario_id)
+
+    rotinas = query.all()
+    linhas = [[
+        r.usuario_nome,
+        r.usuario.regional.nome if r.usuario and r.usuario.regional else '',
+        r.atividade_nome,
+        r.periodicidade,
+        r.status,
+        r.data_conclusao.isoformat() if r.data_conclusao else ''
+    ] for r in rotinas]
+    return _export_csv(
+        f'dashboard_{periodo}.csv',
+        ['Usuario', 'Regional', 'Atividade', 'Periodicidade', 'Status', 'Conclusao'],
+        linhas
+    )
 
 
 @rotinas_bp.route('/pendencias', methods=['GET'])

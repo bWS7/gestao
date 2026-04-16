@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from backend.audit import log_audit, diff_payload
 from backend.constants import PERFIS_ATIVIDADE
 from backend.models import AtividadeCatalogo, Usuario
 from backend.extensions import db
@@ -61,6 +62,8 @@ def criar():
     )
     db.session.add(a)
     db.session.commit()
+    log_audit(me.id, 'atividade_catalogo', a.id, 'criar', a.to_dict())
+    db.session.commit()
     return jsonify(a.to_dict()), 201
 
 
@@ -71,6 +74,7 @@ def atualizar(aid):
     if me.perfil != 'admin':
         return jsonify({'erro': 'Acesso negado'}), 403
     a = AtividadeCatalogo.query.get_or_404(aid)
+    before = a.to_dict()
     data = request.get_json()
     if 'perfil' in data and data['perfil'] not in PERFIS_ATIVIDADE:
         return jsonify({'erro': 'Perfil inválido para atividade'}), 400
@@ -78,6 +82,9 @@ def atualizar(aid):
                   'tipo_evidencia', 'indicador', 'prazo_padrao', 'ordem', 'ativo']:
         if campo in data:
             setattr(a, campo, data[campo])
+    mudancas = diff_payload(before, a.to_dict())
+    if mudancas:
+        log_audit(me.id, 'atividade_catalogo', a.id, 'atualizar', mudancas)
     db.session.commit()
     return jsonify(a.to_dict())
 
@@ -90,5 +97,6 @@ def deletar(aid):
         return jsonify({'erro': 'Acesso negado'}), 403
     a = AtividadeCatalogo.query.get_or_404(aid)
     a.ativo = False
+    log_audit(me.id, 'atividade_catalogo', a.id, 'excluir', {'ativo': False, 'nome': a.nome})
     db.session.commit()
     return jsonify({'mensagem': 'Atividade inativada'})

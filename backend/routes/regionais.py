@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from backend.audit import log_audit, diff_payload
 from backend.models import Regional, Usuario
 from backend.extensions import db
 
@@ -39,6 +40,8 @@ def criar():
     r = Regional(nome=data['nome'], descricao=data.get('descricao'))
     db.session.add(r)
     db.session.commit()
+    log_audit(me.id, 'regional', r.id, 'criar', r.to_dict())
+    db.session.commit()
     return jsonify(r.to_dict()), 201
 
 
@@ -49,6 +52,7 @@ def atualizar(rid):
     if me.perfil != 'admin':
         return jsonify({'erro': 'Acesso negado'}), 403
     r = Regional.query.get_or_404(rid)
+    before = r.to_dict()
     data = request.get_json()
     if 'nome' in data:
         r.nome = data['nome']
@@ -56,6 +60,10 @@ def atualizar(rid):
         r.descricao = data['descricao']
     if 'ativo' in data:
         r.ativo = data['ativo']
+    after = r.to_dict()
+    mudancas = diff_payload(before, after)
+    if mudancas:
+        log_audit(me.id, 'regional', r.id, 'atualizar', mudancas)
     db.session.commit()
     return jsonify(r.to_dict())
 
@@ -68,5 +76,6 @@ def deletar(rid):
         return jsonify({'erro': 'Acesso negado'}), 403
     r = Regional.query.get_or_404(rid)
     r.ativo = False
+    log_audit(me.id, 'regional', r.id, 'excluir', {'ativo': False, 'nome': r.nome})
     db.session.commit()
     return jsonify({'mensagem': 'Regional inativada'})

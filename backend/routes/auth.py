@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from backend.audit import log_audit
 from backend.models import Usuario
 from backend.extensions import db
 
@@ -53,5 +54,6 @@ def trocar_senha():
         return jsonify({'erro': 'Nova senha deve ter pelo menos 6 caracteres'}), 400
 
     usuario.set_senha(nova_senha)
+    log_audit(usuario.id, 'usuario', usuario.id, 'trocar_senha', {'origem': 'perfil'})
     db.session.commit()
     return jsonify({'mensagem': 'Senha alterada com sucesso'})
