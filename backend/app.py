@@ -1,6 +1,7 @@
 import os
 from flask import Flask, send_from_directory, jsonify
 from flask_cors import CORS
+from sqlalchemy import text
 from backend.extensions import db, jwt, migrate
 from backend.routes.auth import auth_bp
 from backend.routes.usuarios import usuarios_bp
@@ -63,6 +64,7 @@ def create_app():
     @app.route('/atividades')
     @app.route('/rotinas')
     @app.route('/perfil')
+    @app.route('/auditoria')
     def frontend():
         return send_from_directory('../frontend', 'index.html')
 
@@ -82,6 +84,7 @@ def create_app():
     with app.app_context():
         os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
         db.create_all()
+        _ensure_runtime_columns()
         _seed_initial_data()
 
     return app
@@ -102,6 +105,21 @@ def _seed_initial_data():
         admin.set_senha('admin123')
         db.session.add(admin)
         db.session.commit()
+
+
+def _ensure_runtime_columns():
+    comandos = [
+        "ALTER TABLE rotinas ADD COLUMN IF NOT EXISTS checklist TEXT",
+        "ALTER TABLE rotinas ADD COLUMN IF NOT EXISTS relatorio TEXT",
+        "ALTER TABLE rotinas ADD COLUMN IF NOT EXISTS plano_semana TEXT",
+        "ALTER TABLE rotinas ADD COLUMN IF NOT EXISTS visitas_ativacoes TEXT",
+        "ALTER TABLE rotinas ADD COLUMN IF NOT EXISTS resultados_visita TEXT",
+        "ALTER TABLE rotinas ADD COLUMN IF NOT EXISTS carteira_ativa TEXT",
+        "ALTER TABLE rotinas ADD COLUMN IF NOT EXISTS metas_canal TEXT",
+    ]
+    for comando in comandos:
+        db.session.execute(text(comando))
+    db.session.commit()
 
     # Catálogo de atividades
     if AtividadeCatalogo.query.count() == 0:

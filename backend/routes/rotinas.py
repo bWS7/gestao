@@ -189,6 +189,20 @@ def atualizar(rid):
         r.novo_prazo = date.fromisoformat(data['novo_prazo']) if data['novo_prazo'] else None
     if 'responsavel_acao' in data:
         r.responsavel_acao = data['responsavel_acao']
+    if 'checklist' in data:
+        r.checklist = data['checklist']
+    if 'relatorio' in data:
+        r.relatorio = data['relatorio']
+    if 'plano_semana' in data:
+        r.plano_semana = data['plano_semana']
+    if 'visitas_ativacoes' in data:
+        r.visitas_ativacoes = data['visitas_ativacoes']
+    if 'resultados_visita' in data:
+        r.resultados_visita = data['resultados_visita']
+    if 'carteira_ativa' in data:
+        r.carteira_ativa = data['carteira_ativa']
+    if 'metas_canal' in data:
+        r.metas_canal = data['metas_canal']
 
     if r.status == 'nao_realizada' and (not r.justificativa or not r.acao_corretiva):
         return jsonify({'erro': 'Justificativa e plano de ação são obrigatórios para atividades não realizadas'}), 400
@@ -203,7 +217,7 @@ def atualizar(rid):
             status_novo=r.status
         )
 
-    if any(chave in data for chave in ['comentario', 'justificativa', 'acao_corretiva', 'novo_prazo', 'responsavel_acao']):
+    if any(chave in data for chave in ['comentario', 'justificativa', 'acao_corretiva', 'novo_prazo', 'responsavel_acao', 'checklist', 'relatorio', 'plano_semana', 'visitas_ativacoes', 'resultados_visita', 'carteira_ativa', 'metas_canal']):
         add_rotina_history(
             r,
             me.id,
@@ -219,7 +233,14 @@ def atualizar(rid):
         'justificativa': r.justificativa,
         'acao_corretiva': r.acao_corretiva,
         'novo_prazo': r.novo_prazo,
-        'responsavel_acao': r.responsavel_acao
+        'responsavel_acao': r.responsavel_acao,
+        'checklist': r.checklist,
+        'relatorio': r.relatorio,
+        'plano_semana': r.plano_semana,
+        'visitas_ativacoes': r.visitas_ativacoes,
+        'resultados_visita': r.resultados_visita,
+        'carteira_ativa': r.carteira_ativa,
+        'metas_canal': r.metas_canal
     })
 
     db.session.commit()

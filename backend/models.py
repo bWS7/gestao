@@ -104,6 +104,13 @@ class Rotina(db.Model):
     acao_corretiva = db.Column(db.Text)
     novo_prazo = db.Column(db.Date)
     responsavel_acao = db.Column(db.String(150))
+    checklist = db.Column(db.Text)
+    relatorio = db.Column(db.Text)
+    plano_semana = db.Column(db.Text)
+    visitas_ativacoes = db.Column(db.Text)
+    resultados_visita = db.Column(db.Text)
+    carteira_ativa = db.Column(db.Text)
+    metas_canal = db.Column(db.Text)
     criado_em = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     atualizado_em = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     atividade = db.relationship('AtividadeCatalogo', backref='rotinas', lazy=True)
@@ -132,6 +139,13 @@ class Rotina(db.Model):
             'acao_corretiva': self.acao_corretiva,
             'novo_prazo': self.novo_prazo.isoformat() if self.novo_prazo else None,
             'responsavel_acao': self.responsavel_acao,
+            'checklist': self.checklist,
+            'relatorio': self.relatorio,
+            'plano_semana': self.plano_semana,
+            'visitas_ativacoes': self.visitas_ativacoes,
+            'resultados_visita': self.resultados_visita,
+            'carteira_ativa': self.carteira_ativa,
+            'metas_canal': self.metas_canal,
             'evidencias': [e.to_dict() for e in self.evidencias],
             'criado_em': self.criado_em.isoformat() if self.criado_em else None,
             'atualizado_em': self.atualizado_em.isoformat() if self.atualizado_em else None

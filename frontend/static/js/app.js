@@ -111,6 +111,9 @@ function navigate(page) {
   if (page === 'acompanhamento' && !['admin', 'sr'].includes(currentUser?.perfil)) {
     page = 'rotinas';
   }
+  if (page === 'auditoria' && currentUser?.perfil !== 'admin') {
+    page = 'rotinas';
+  }
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
   const pageEl = document.getElementById(`page-${page}`);
@@ -130,7 +133,8 @@ const PAGE_TITLES = {
   regionais: 'Regionais',
   atividades: 'Catálogo de Atividades',
   pendencias: 'Pendências',
-  perfil: 'Meu Perfil'
+  perfil: 'Meu Perfil',
+  auditoria: 'Auditoria'
 };
 
 // ── PERFIL LABELS ──
@@ -200,6 +204,9 @@ function renderSidebar() {
       </button>
       <button class="nav-link" data-page="atividades" onclick="navigate('atividades')">
         Catálogo de Atividades
+      </button>
+      <button class="nav-link" data-page="auditoria" onclick="navigate('auditoria')">
+        Auditoria
       </button>
     </div>`;
   }
@@ -484,6 +491,44 @@ async function openRotinaModal(id) {
       <textarea id="rm-comentario" class="form-control" rows="2" placeholder="Observações sobre a execução..." ${!canEdit?'disabled':''}>${rotina.comentario || ''}</textarea>
     </div>
 
+    ${['sr', 'gv', 'cd'].includes(rotina.perfil) ? `
+    <div class="form-group">
+      <label class="form-label">Plano da Semana</label>
+      <textarea id="rm-plano-semana" class="form-control" rows="2" placeholder="Registre o plano da semana..." ${!canEdit?'disabled':''}>${rotina.plano_semana || ''}</textarea>
+    </div>` : ''}
+
+    ${rotina.perfil === 'cd' ? `
+    <div class="form-grid cols-2">
+      <div class="form-group">
+        <label class="form-label">Checklist</label>
+        <textarea id="rm-checklist" class="form-control" rows="3" placeholder="Checklist operacional do período..." ${!canEdit?'disabled':''}>${rotina.checklist || ''}</textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Relatório</label>
+        <textarea id="rm-relatorio" class="form-control" rows="3" placeholder="Resumo do relatório do empreendimento..." ${!canEdit?'disabled':''}>${rotina.relatorio || ''}</textarea>
+      </div>
+    </div>` : ''}
+
+    ${rotina.perfil === 'sp' ? `
+    <div class="form-grid cols-2">
+      <div class="form-group">
+        <label class="form-label">Visitas / Ativações</label>
+        <textarea id="rm-visitas" class="form-control" rows="3" placeholder="Registre as visitas e ativações realizadas..." ${!canEdit?'disabled':''}>${rotina.visitas_ativacoes || ''}</textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Resultados por Visita</label>
+        <textarea id="rm-resultados" class="form-control" rows="3" placeholder="Resultados gerados por visita..." ${!canEdit?'disabled':''}>${rotina.resultados_visita || ''}</textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Carteira Ativa</label>
+        <textarea id="rm-carteira" class="form-control" rows="3" placeholder="Acompanhe a carteira ativa..." ${!canEdit?'disabled':''}>${rotina.carteira_ativa || ''}</textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Metas do Canal</label>
+        <textarea id="rm-metas" class="form-control" rows="3" placeholder="Registre e acompanhe as metas do canal..." ${!canEdit?'disabled':''}>${rotina.metas_canal || ''}</textarea>
+      </div>
+    </div>` : ''}
+
     <div id="rm-justificativa-wrap" class="form-group" style="${rotina.status!=='nao_realizada'&&rotina.status!=='em_andamento'?'display:none':''}">
       <label class="form-label">Justificativa</label>
       <textarea id="rm-justificativa" class="form-control" rows="2" placeholder="Por que não foi realizada?" ${!canEdit?'disabled':''}>${rotina.justificativa || ''}</textarea>
@@ -544,7 +589,14 @@ async function saveRotina() {
     justificativa: document.getElementById('rm-justificativa')?.value || '',
     acao_corretiva: document.getElementById('rm-acao')?.value || '',
     responsavel_acao: document.getElementById('rm-responsavel')?.value || '',
-    novo_prazo: document.getElementById('rm-novo-prazo')?.value || null
+    novo_prazo: document.getElementById('rm-novo-prazo')?.value || null,
+    checklist: document.getElementById('rm-checklist')?.value || '',
+    relatorio: document.getElementById('rm-relatorio')?.value || '',
+    plano_semana: document.getElementById('rm-plano-semana')?.value || '',
+    visitas_ativacoes: document.getElementById('rm-visitas')?.value || '',
+    resultados_visita: document.getElementById('rm-resultados')?.value || '',
+    carteira_ativa: document.getElementById('rm-carteira')?.value || '',
+    metas_canal: document.getElementById('rm-metas')?.value || ''
   };
   if (payload.status === 'nao_realizada' && (!payload.justificativa || !payload.acao_corretiva)) {
     toast('Preencha a justificativa e o plano de ação', 'error');
@@ -1147,7 +1199,8 @@ const PAGE_LOADERS = {
   usuarios: loadUsuarios,
   regionais: loadRegionais,
   atividades: loadAtividades,
-  perfil: loadPerfil
+  perfil: loadPerfil,
+  auditoria: loadAuditoria
 };
 
 async function loadPerfil() {
@@ -1180,6 +1233,53 @@ async function loadPerfil() {
     </div>`;
 }
 
+async function loadAuditoria() {
+  const wrap = document.getElementById('auditoria-content');
+  wrap.innerHTML = `<div class="spinner"></div>`;
+  const r = await apiFetch('/api/rotinas/audit-log?limit=200');
+  if (!r || !r.ok) {
+    wrap.innerHTML = '<p class="text-muted">Erro ao carregar auditoria.</p>';
+    return;
+  }
+
+  const logs = r.data;
+  wrap.innerHTML = `
+    <div class="analytics-page">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Log de Auditoria</div>
+      </div>
+      <div class="card-body" style="padding:0">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Quando</th>
+                <th>Usuário</th>
+                <th>Entidade</th>
+                <th>Ação</th>
+                <th>Detalhes</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${logs.length === 0 ? `<tr><td colspan="5" class="text-center text-muted" style="padding:2rem">Nenhum log encontrado</td></tr>` :
+                logs.map(log => `
+                  <tr>
+                    <td style="font-size:.8rem;color:var(--cinza-light)">${fmtDatetime(log.criado_em)}</td>
+                    <td>${log.usuario_nome || 'Sistema'}</td>
+                    <td>${log.entidade} #${log.entidade_id || '—'}</td>
+                    <td><span class="badge badge-admin">${log.acao}</span></td>
+                    <td style="font-size:.8rem;color:var(--cinza)">${formatAuditDetails(log.detalhes)}</td>
+                  </tr>
+                `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    </div>`;
+}
+
 async function trocarSenha() {
   const r = await apiFetch('/api/auth/trocar-senha', {
     method: 'POST',
@@ -1201,6 +1301,21 @@ function fmtDate(d) {
 function fmtDatetime(d) {
   if (!d) return '—';
   return new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function formatAuditDetails(details) {
+  if (!details) return '—';
+  try {
+    const parsed = typeof details === 'string' ? JSON.parse(details) : details;
+    return Object.entries(parsed).map(([key, value]) => {
+      if (value && typeof value === 'object' && 'antes' in value && 'depois' in value) {
+        return `${key}: ${value.antes ?? '—'} -> ${value.depois ?? '—'}`;
+      }
+      return `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`;
+    }).join(' | ');
+  } catch {
+    return String(details);
+  }
 }
 
 // ── INIT ──
