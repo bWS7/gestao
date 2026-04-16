@@ -9,6 +9,27 @@ from backend.routes.atividades import atividades_bp
 from backend.routes.rotinas import rotinas_bp
 
 
+def _get_database_url():
+    db_url = os.environ.get('DATABASE_URL')
+    if db_url:
+        if db_url.startswith('postgres://'):
+            return db_url.replace('postgres://', 'postgresql://', 1)
+        return db_url
+
+    pg_host = os.environ.get('PGHOST')
+    pg_port = os.environ.get('PGPORT', '5432')
+    pg_user = os.environ.get('PGUSER')
+    pg_password = os.environ.get('PGPASSWORD')
+    pg_database = os.environ.get('PGDATABASE')
+
+    if all([pg_host, pg_user, pg_password, pg_database]):
+        return f'postgresql://{pg_user}:{pg_password}@{pg_host}:{pg_port}/{pg_database}'
+
+    raise RuntimeError(
+        'PostgreSQL configuration is required. Set DATABASE_URL or the PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE variables.'
+    )
+
+
 def create_app():
     app = Flask(__name__, static_folder='../frontend/static', static_url_path='/static')
 
@@ -17,11 +38,7 @@ def create_app():
     app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'jwt-secret-mude-em-producao')
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = False
 
-    db_url = os.environ.get('DATABASE_URL', 'sqlite:///gestao_comercial.db')
-    # Railway usa postgres://, SQLAlchemy precisa de postgresql://
-    if db_url.startswith('postgres://'):
-        db_url = db_url.replace('postgres://', 'postgresql://', 1)
-    app.config['SQLALCHEMY_DATABASE_URI'] = db_url
+    app.config['SQLALCHEMY_DATABASE_URI'] = _get_database_url()
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
     # Extensions
