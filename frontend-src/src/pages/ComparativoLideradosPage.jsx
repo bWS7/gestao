@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Download, FileText, Users2 } from 'lucide-react';
 import { apiFetch, downloadExport } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { Card } from '../components/ui/Card';
 import { Table, Thead, Th, Tbody, Tr, Td } from '../components/ui/Table';
@@ -28,31 +29,53 @@ function BarraComparativa({ pct }) {
 }
 
 export default function ComparativoLideradosPage() {
+  const { currentUser } = useAuth();
   const { toast } = useToast();
+  const ehAdmin = currentUser?.perfil === 'admin';
   const [dados, setDados] = useState(null);
   const [usuarios, setUsuarios] = useState([]);
+  const [regionais, setRegionais] = useState([]);
+  const [regionalId, setRegionalId] = useState('');
   const [loading, setLoading] = useState(true);
   const [usuarioId, setUsuarioId] = useState('');
   const [periodicidade, setPeriodicidade] = useState('todas');
   const [dataInicio, setDataInicio] = useState(primeiroDiaMes());
   const [dataFim, setDataFim] = useState(ultimoDiaMes());
 
+  // Admin não tem regional própria (diferente do Superintendente, que o
+  // backend já resolve sozinho) — precisa escolher qual regional comparar.
   useEffect(() => {
-    apiFetch('/api/usuarios/?status=ativo').then(r => {
+    if (!ehAdmin) return;
+    apiFetch('/api/regionais/?ativo=true').then(r => {
+      if (r?.ok) {
+        setRegionais(r.data);
+        if (r.data.length === 1) setRegionalId(String(r.data[0].id));
+      }
+    });
+  }, [ehAdmin]);
+
+  useEffect(() => {
+    let url = '/api/usuarios/?status=ativo';
+    if (ehAdmin && regionalId) url += `&regional_id=${regionalId}`;
+    apiFetch(url).then(r => {
       if (r?.ok) setUsuarios(r.data.filter(u => !['admin', 'sr'].includes(u.perfil)));
     });
-  }, []);
+  }, [ehAdmin, regionalId]);
+
+  const podeCarregar = !ehAdmin || !!regionalId;
 
   const load = useCallback(async () => {
+    if (!podeCarregar) { setLoading(false); return; }
     setLoading(true);
     let url = `/api/rotinas/relatorio-liderados?data_inicio=${dataInicio}&data_fim=${dataFim}`;
     if (usuarioId) url += `&usuario_id=${usuarioId}`;
     if (periodicidade && periodicidade !== 'todas') url += `&periodicidade=${periodicidade}`;
+    if (ehAdmin && regionalId) url += `&regional_id=${regionalId}`;
     const r = await apiFetch(url);
     if (r?.ok) setDados(r.data);
     else toast(r?.data?.erro || 'Erro ao carregar relatório', 'error');
     setLoading(false);
-  }, [usuarioId, periodicidade, dataInicio, dataFim, toast]);
+  }, [usuarioId, periodicidade, dataInicio, dataFim, ehAdmin, regionalId, podeCarregar, toast]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -60,6 +83,7 @@ export default function ComparativoLideradosPage() {
     let url = `/api/rotinas/relatorio-liderados/export?formato=${formato}&data_inicio=${dataInicio}&data_fim=${dataFim}`;
     if (usuarioId) url += `&usuario_id=${usuarioId}`;
     if (periodicidade && periodicidade !== 'todas') url += `&periodicidade=${periodicidade}`;
+    if (ehAdmin && regionalId) url += `&regional_id=${regionalId}`;
     downloadExport(url, `comparativo_liderados.${formato}`).catch(() => toast('Erro ao exportar', 'error'));
   };
 
@@ -68,6 +92,14 @@ export default function ComparativoLideradosPage() {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-3">
+        {ehAdmin && (
+          <Select value={regionalId} onChange={e => setRegionalId(e.target.value)} className="w-52">
+            <option value="">Selecione a Regional...</option>
+            {regionais.map(r => (
+              <option key={r.id} value={r.id}>{r.nome}</option>
+            ))}
+          </Select>
+        )}
         <Input type="date" value={dataInicio} onChange={e => setDataInicio(e.target.value)} className="w-40" title="Data início" />
         <Input type="date" value={dataFim} onChange={e => setDataFim(e.target.value)} className="w-40" title="Data fim" />
         <Select value={usuarioId} onChange={e => setUsuarioId(e.target.value)} className="w-52">
@@ -84,12 +116,14 @@ export default function ComparativoLideradosPage() {
           <option value="mensal">Mensal</option>
         </Select>
         <div className="ml-auto flex gap-2">
-          <Button variant="secondary" icon={Download} onClick={() => exportar('csv')}>Excel (CSV)</Button>
-          <Button variant="secondary" icon={FileText} onClick={() => exportar('pdf')}>PDF</Button>
+          <Button variant="secondary" icon={Download} onClick={() => exportar('csv')} disabled={!podeCarregar}>Excel (CSV)</Button>
+          <Button variant="secondary" icon={FileText} onClick={() => exportar('pdf')} disabled={!podeCarregar}>PDF</Button>
         </div>
       </div>
 
-      {loading ? (
+      {!podeCarregar ? (
+        <EmptyState icon={Users2} title="Selecione uma regional" description="Escolha a regional para ver o comparativo dos liderados." />
+      ) : loading ? (
         <PageSpinner />
       ) : (
         <>
