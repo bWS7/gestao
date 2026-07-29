@@ -15,6 +15,7 @@ import AtividadesPage from './pages/AtividadesPage';
 import AuditoriaPage from './pages/AuditoriaPage';
 import MetricasAprovacaoPage from './pages/MetricasAprovacaoPage';
 import RelatoriosPreenchimentoPage from './pages/RelatoriosPreenchimentoPage';
+import ComparativoLideradosPage from './pages/ComparativoLideradosPage';
 import MeuPerfil from './pages/MeuPerfil';
 
 const PAGES = {
@@ -31,6 +32,7 @@ const PAGES = {
   auditoria:            AuditoriaPage,
   metricas_aprovacao:   MetricasAprovacaoPage,
   relatorios:           RelatoriosPreenchimentoPage,
+  comparativo_liderados: ComparativoLideradosPage,
 };
 
 // Role-based access
@@ -45,6 +47,7 @@ const PAGE_ROLES = {
   auditoria:            ['admin'],
   metricas_aprovacao:   ['admin'],
   relatorios:           ['admin'],
+  comparativo_liderados: ['admin', 'sr'],
 };
 
 function AppContent() {

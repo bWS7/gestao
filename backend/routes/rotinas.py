@@ -7,8 +7,8 @@ from flask import Blueprint, request, jsonify, current_app, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
 from backend.audit import log_audit
-from backend.utils.dates import get_now_br
-from backend.models import Rotina, AtividadeCatalogo, Usuario, HistoricoRotina, Evidencia, AuditLog, FechamentoPeriodo, GRACE_DAYS_BY_PERIODICIDADE, GRACE_DAYS_REENVIO
+from backend.utils.dates import get_now_br, hoje_br
+from backend.models import Rotina, AtividadeCatalogo, Usuario, HistoricoRotina, Evidencia, AuditLog, FechamentoPeriodo, Notificacao, GRACE_DAYS_BY_PERIODICIDADE, GRACE_DAYS_REENVIO
 from backend.constants import atividade_requer_aprovacao
 from backend.extensions import db
 from datetime import date, timedelta, datetime, timezone
@@ -26,6 +26,11 @@ def get_current_user():
 
 def can_access_rotina(me, rotina):
     if me.perfil == 'admin':
+        return True
+    if rotina.responsavel_id == me.id:
+        # Responsável por uma ação delegada nesta rotina (ex.: Plano de Ação)
+        # pode visualizar a atividade mesmo sem ser o dono, pra acompanhar via
+        # a notificação recebida — mas não editá-la (ver can_edit_rotina).
         return True
     if me.perfil == 'sr':
         return rotina.usuario and rotina.usuario.regional_id == me.regional_id
@@ -51,6 +56,46 @@ def add_rotina_history(rotina, usuario_id, acao, observacao=None, status_anterio
     db.session.add(hist)
 
 
+def notificar_delegacao(rotina, ator):
+    """Cria a notificação de atividade delegada (Seção 4) quando o
+    responsavel_id de uma rotina é definido para alguém diferente do dono da
+    atividade e de quem está fazendo a alteração. Evita duplicar: se já existe
+    uma notificação não lida desta rotina para esse mesmo destinatário, não
+    cria outra (só quando o responsável muda de fato pra outra pessoa)."""
+    destinatario_id = rotina.responsavel_id
+    if not destinatario_id or destinatario_id == rotina.usuario_id:
+        return
+    ja_existe = Notificacao.query.filter_by(
+        rotina_id=rotina.id, usuario_id=destinatario_id, lida=False
+    ).first()
+    if ja_existe:
+        return
+    nome_atividade = rotina.atividade.nome if rotina.atividade else 'uma atividade'
+    db.session.add(Notificacao(
+        usuario_id=destinatario_id,
+        criado_por_id=ator.id if ator else rotina.usuario_id,
+        tipo='atividade_delegada',
+        titulo=f'Você foi designado responsável: {nome_atividade}',
+        mensagem=f'{ator.nome if ator else rotina.usuario.nome} definiu você como responsável pela ação em "{nome_atividade}" ({rotina.usuario.nome if rotina.usuario else "—"}).',
+        rotina_id=rotina.id,
+    ))
+
+
+def marcar_notificacoes_lidas_por_rotina(rotina, usuario_id=None):
+    """Marca como lidas as notificações desta rotina — de um destinatário
+    específico (ao visualizar a atividade) ou de todos (quando a atividade é
+    concluída), conforme pedido: a notificação some quando a atividade é
+    visualizada OU concluída."""
+    query = Notificacao.query.filter_by(rotina_id=rotina.id, lida=False)
+    if usuario_id:
+        query = query.filter_by(usuario_id=usuario_id)
+    pendentes = query.all()
+    for n in pendentes:
+        n.lida = True
+        n.lida_em = get_now_br()
+    return len(pendentes)
+
+
 def allowed_file(filename):
     # Aceita qualquer tipo de documento, slide, planilha, imagem, etc.
     # Bloqueia apenas executaveis/scripts por seguranca — os arquivos sao
@@ -66,7 +111,7 @@ def allowed_file(filename):
 
 
 def get_periodo(tipo, referencia=None):
-    hoje = referencia or date.today()
+    hoje = referencia or hoje_br()
     if tipo == 'diaria':
         inicio = hoje
         fim = hoje
@@ -133,7 +178,7 @@ def reconciliar_semanas_mes_atual():
     _ensure_runtime_columns em app.py), antes de qualquer rotina ser gerada sob
     o esquema novo — evita a corrida em que uma rotina antiga (data errada) e
     uma nova (criada por engano pra mesma semana) coexistiriam duplicadas."""
-    hoje = date.today()
+    hoje = hoje_br()
     primeiro_dia_mes = hoje.replace(day=1)
     ultimo_dia_mes = (primeiro_dia_mes + relativedelta(months=1)) - timedelta(days=1)
     semanas = _semanas_do_mes(hoje)
@@ -200,7 +245,7 @@ def filtro_carry_over(model, referencia):
     Só se aplica quando se está vendo o período que contém a data de hoje."""
     from sqlalchemy import or_, and_
 
-    hoje = date.today()
+    hoje = hoje_br()
     filtros = []
     for periodicidade, grace in GRACE_DAYS_BY_PERIODICIDADE.items():
         if not grace:
@@ -307,6 +352,28 @@ def _stats_execucao(rotinas):
     return {'total': total, 'concluidas': concluidas, 'percentual_execucao': percentual}
 
 
+def _stats_liderado(rotinas):
+    """Total/concluídas/pendentes/atrasadas de uma lista de Rotina de UM
+    liderado — base do Relatório Comparativo das Rotinas dos Liderados
+    (Seção 3): concluída (mesma regra de _stats_execucao), atrasada (vencida
+    — prazo já passou — ou já registrada como Não Realizada) e pendente
+    (nem uma coisa nem outra: ainda em prazo)."""
+    total = len(rotinas)
+    concluidas = pendentes = atrasadas = 0
+    for r in rotinas:
+        if r.status == 'concluida' and r.status_aprovacao != 'reprovada':
+            concluidas += 1
+        elif r.status == 'nao_realizada' or rotina_vencida(r):
+            atrasadas += 1
+        else:
+            pendentes += 1
+    percentual = round((concluidas / total * 100), 1) if total else 0
+    return {
+        'total': total, 'concluidas': concluidas, 'pendentes': pendentes,
+        'atrasadas': atrasadas, 'percentual_execucao': percentual,
+    }
+
+
 def _janela_anterior_em_carencia(referencia, periodicidades):
     """Monta a condição (SQLAlchemy) do(s) período(s) imediatamente anterior(es)
     ao que contém `referencia`, restrita às periodicidades que têm folga
@@ -322,7 +389,7 @@ def _janela_anterior_em_carencia(referencia, periodicidades):
     daquele período)."""
     from sqlalchemy import or_, and_
 
-    hoje = date.today()
+    hoje = hoje_br()
     condicoes = []
     prazo_mais_distante = None
     for periodicidade in periodicidades:
@@ -353,7 +420,7 @@ def rotina_vencida_pendente(rotina):
         and rotina.atividade.obrigatoria
         and rotina.status in ['nao_iniciada', 'em_andamento']
         and prazo_limite
-        and prazo_limite < date.today()
+        and prazo_limite < hoje_br()
     )
 
 
@@ -364,7 +431,7 @@ def rotina_vencida(rotina):
         rotina.atividade
         and rotina.atividade.obrigatoria
         and prazo_limite
-        and prazo_limite < date.today()
+        and prazo_limite < hoje_br()
     )
 
 
@@ -372,7 +439,7 @@ def rotina_ainda_nao_liberada(rotina):
     """O período da rotina ainda não começou (ex.: Semana 3 gerada
     antecipadamente pelo painel mensal, mas hoje ainda estamos na Semana 2) —
     bloqueada pra edição/conclusão até a data de início chegar."""
-    return bool(rotina.periodo_inicio and rotina.periodo_inicio > date.today())
+    return bool(rotina.periodo_inicio and rotina.periodo_inicio > hoje_br())
 
 
 def rotina_justificada(rotina):
@@ -404,7 +471,7 @@ def _gerar_rotinas_para_usuarios(usuario_ids=None, referencia=None, periodicidad
     (/gerar, disparado manualmente por um admin) e pelo endpoint de cron
     (/interno/gerar-e-fechar, disparado por um agendador externo). Idempotente,
     mesmo padrão de ensure_rotinas_atuais."""
-    referencia = referencia or date.today()
+    referencia = referencia or hoje_br()
     query = Usuario.query.filter_by(status='ativo')
     if usuario_ids and isinstance(usuario_ids, list) and len(usuario_ids) > 0:
         query = query.filter(Usuario.id.in_(usuario_ids))
@@ -452,7 +519,7 @@ def gerar_rotinas():
     usuario_ids = data.get('usuario_ids')  # Lista de IDs ou None para todos
     referencia_str = data.get('referencia')
     periodicidade_filtro = data.get('periodicidade') # 'diaria', 'semanal', 'quinzenal', 'mensal' ou None
-    referencia = date.fromisoformat(referencia_str) if referencia_str else date.today()
+    referencia = date.fromisoformat(referencia_str) if referencia_str else hoje_br()
 
     if not periodicidade_filtro or periodicidade_filtro == 'todas':
         # "Todas" gera o mês inteiro (semanas/quinzenas/mês/dias), não só o
@@ -503,7 +570,7 @@ def ensure_rotinas_atuais(usuario, referencia=None):
     agendador externo."""
     if not usuario or not usuario.perfis_list:
         return 0
-    referencia = referencia or date.today()
+    referencia = referencia or hoje_br()
     atividades = AtividadeCatalogo.query.filter(
         AtividadeCatalogo.perfil.in_(usuario.perfis_list),
         AtividadeCatalogo.ativo == True
@@ -560,7 +627,7 @@ def ensure_rotinas_mes(usuario, referencia=None):
     usando ensure_rotinas_atuais, que já basta pra elas."""
     if not usuario or not usuario.perfis_list:
         return 0
-    referencia = referencia or date.today()
+    referencia = referencia or hoje_br()
     primeiro_dia_mes = referencia.replace(day=1)
     ultimo_dia_mes = (primeiro_dia_mes + relativedelta(months=1)) - timedelta(days=1)
 
@@ -625,7 +692,7 @@ def fechar_periodos_pendentes(usuario):
     o que já foi fechado), chamado sob demanda, mesmo padrão de
     ensure_rotinas_atuais (sem agendador externo necessário pra esta fase — ver
     Fase 4a do plano pra cobertura independente de login)."""
-    hoje = date.today()
+    hoje = hoje_br()
     periodos = db.session.query(
         Rotina.periodicidade, Rotina.periodo_inicio, Rotina.periodo_fim
     ).filter(
@@ -685,7 +752,7 @@ def listar():
     historico = request.args.get('historico', '').lower() in ('1', 'true')
     modo = request.args.get('modo')  # 'atual' | 'historico' | 'intervalo' — opcional, ver condicao_periodo_rotinas
 
-    referencia = date.fromisoformat(data_ref) if data_ref else date.today()
+    referencia = date.fromisoformat(data_ref) if data_ref else hoje_br()
 
     cond = condicao_periodo_rotinas(periodo, referencia, data_inicio, data_fim, historico, modo)
     query = Rotina.query.join(Usuario, Rotina.usuario_id == Usuario.id)
@@ -725,6 +792,11 @@ def obter(rid):
     r = Rotina.query.get_or_404(rid)
     if not can_access_rotina(me, r):
         return jsonify({'erro': 'Acesso negado'}), 403
+    # Visualizar a atividade já "lê" a notificação de delegação recebida por
+    # este usuário (a notificação some ao ser visualizada, sem exigir ação
+    # explícita — ver Seção 4).
+    if r.responsavel_id == me.id and marcar_notificacoes_lidas_por_rotina(r, usuario_id=me.id):
+        db.session.commit()
     return jsonify(r.to_dict())
 
 
@@ -742,6 +814,7 @@ def atualizar(rid):
 
     data = request.get_json()
     status_anterior = r.status
+    responsavel_id_anterior = r.responsavel_id
     vencida_pendente = rotina_vencida(r)
 
     if 'status' in data:
@@ -775,6 +848,14 @@ def atualizar(rid):
         r.novo_prazo = date.fromisoformat(data['novo_prazo']) if data['novo_prazo'] else None
     if 'responsavel_acao' in data:
         r.responsavel_acao = data['responsavel_acao']
+    if 'responsavel_id' in data:
+        novo_responsavel_id = data['responsavel_id'] or None
+        r.responsavel_id = novo_responsavel_id
+        # Mantém o nome em texto (responsavel_acao) sincronizado com o usuário
+        # escolhido, salvo se o front já mandou um texto explícito neste payload.
+        if 'responsavel_acao' not in data:
+            responsavel_usuario = Usuario.query.get(novo_responsavel_id) if novo_responsavel_id else None
+            r.responsavel_acao = responsavel_usuario.nome if responsavel_usuario else None
     if 'checklist' in data:
         r.checklist = data['checklist']
     if 'relatorio' in data:
@@ -795,6 +876,17 @@ def atualizar(rid):
 
     if r.status == 'nao_realizada' and (not r.comentario or not r.plano_semana):
         return jsonify({'erro': 'Justificativa e Plano de Ação são obrigatórios para atividades não realizadas'}), 400
+
+    # Notificação de delegação (Seção 4): dispara quando o responsável muda pra
+    # alguém diferente do dono da atividade; a notificação anterior (se houver,
+    # de outro responsável) já não importa mais pro novo destinatário.
+    if r.responsavel_id != responsavel_id_anterior:
+        notificar_delegacao(r, me)
+
+    # Atividade concluída: encerra qualquer notificação de delegação pendente
+    # desta rotina, mesmo que o responsável nunca tenha aberto a atividade.
+    if r.status == 'concluida' and status_anterior != 'concluida':
+        marcar_notificacoes_lidas_por_rotina(r)
 
     if status_anterior != r.status:
         add_rotina_history(
@@ -993,7 +1085,7 @@ def minha_aderencia():
     me = get_current_user()
     periodo = request.args.get('periodo', 'semanal')
     data_ref = request.args.get('data_ref')
-    referencia = date.fromisoformat(data_ref) if data_ref else date.today()
+    referencia = date.fromisoformat(data_ref) if data_ref else hoje_br()
     if periodo == 'todas':
         inicio, fim = get_periodo('mensal', referencia)
         rotinas = Rotina.query.filter(
@@ -1097,7 +1189,7 @@ def minha_aderencia_mensal():
 
     me = get_current_user()
     data_ref = request.args.get('data_ref')
-    referencia = date.fromisoformat(data_ref) if data_ref else date.today()
+    referencia = date.fromisoformat(data_ref) if data_ref else hoje_br()
 
     # Gera o mês inteiro (não só o período corrente) antes de calcular as
     # categorias — sem isso, um período que ainda não chegou mostraria "0 de 0"
@@ -1351,6 +1443,44 @@ def _export_csv(nome_arquivo, cabecalho, linhas):
     return send_file(mem, mimetype='text/csv', as_attachment=True, download_name=nome_arquivo)
 
 
+def _export_pdf(nome_arquivo, titulo, subtitulo, cabecalho, linhas):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=landscape(A4), title=titulo,
+        leftMargin=1.5 * cm, rightMargin=1.5 * cm, topMargin=1.5 * cm, bottomMargin=1.5 * cm,
+    )
+    estilos = getSampleStyleSheet()
+    elementos = [Paragraph(titulo, estilos['Title'])]
+    if subtitulo:
+        elementos.append(Paragraph(subtitulo, estilos['Normal']))
+    elementos.append(Spacer(1, 0.6 * cm))
+
+    dados = [cabecalho] + [[('' if c is None else str(c)) for c in linha] for linha in linhas]
+    tabela = Table(dados, repeatRows=1)
+    tabela.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7a1f2b')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dddddd')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f7f7f7')]),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elementos.append(tabela)
+    doc.build(elementos)
+
+    mem = io.BytesIO(buffer.getvalue())
+    mem.seek(0)
+    return send_file(mem, mimetype='application/pdf', as_attachment=True, download_name=nome_arquivo)
+
+
 @rotinas_bp.route('/export', methods=['GET'])
 @jwt_required()
 def exportar_rotinas():
@@ -1367,7 +1497,7 @@ def exportar_rotinas():
     data_fim = request.args.get('data_fim')
     historico = request.args.get('historico', '').lower() in ('1', 'true')
     modo = request.args.get('modo')  # 'atual' | 'historico' | 'intervalo' — opcional, ver condicao_periodo_rotinas
-    referencia = date.fromisoformat(data_ref) if data_ref else date.today()
+    referencia = date.fromisoformat(data_ref) if data_ref else hoje_br()
 
     cond = condicao_periodo_rotinas(periodo, referencia, data_inicio, data_fim, historico, modo)
     query = Rotina.query.join(Usuario, Rotina.usuario_id == Usuario.id)
@@ -1558,7 +1688,7 @@ def dashboard():
     selecao = request.args.get('selecao', '')
     data_ref = request.args.get('data_ref')
 
-    referencia = date.fromisoformat(data_ref) if data_ref else date.today()
+    referencia = date.fromisoformat(data_ref) if data_ref else hoje_br()
 
     rotinas, inicio, fim = _query_selecao_dashboard(
         selecao, referencia, me, regional_id, usuario_id, perfil_filtro, atividade_id_filtro
@@ -1672,7 +1802,7 @@ def exportar_dashboard():
     atividade_id_filtro = request.args.get('atividade_id', type=int)
     selecao = request.args.get('selecao', '')
     data_ref = request.args.get('data_ref')
-    referencia = date.fromisoformat(data_ref) if data_ref else date.today()
+    referencia = date.fromisoformat(data_ref) if data_ref else hoje_br()
 
     rotinas, _inicio, _fim = _query_selecao_dashboard(
         selecao, referencia, me, regional_id, usuario_id, perfil_filtro, atividade_id_filtro
@@ -1690,6 +1820,113 @@ def exportar_dashboard():
         ['Usuario', 'Regional', 'Atividade', 'Periodicidade', 'Status', 'Conclusao'],
         linhas
     )
+
+
+def _montar_relatorio_liderados(me):
+    """Monta o comparativo de rotinas dos liderados (Seção 3) a partir dos
+    query params da requisição atual — usado tanto pelo endpoint JSON (tela)
+    quanto pelos exports (CSV/PDF), pra manter os mesmos filtros nos dois.
+    'Liderados' = colaboradores ativos (gv/cd/sp) da regional do Superintendente
+    (mesmo critério de visibilidade já usado no dashboard e na listagem de
+    rotinas pra perfil 'sr'); admin pode escolher a regional."""
+    from sqlalchemy import and_
+
+    regional_id = request.args.get('regional_id', type=int) if me.perfil == 'admin' else me.regional_id
+    if not regional_id:
+        return None, 'Informe a regional (regional_id).'
+
+    usuario_id = request.args.get('usuario_id', type=int)
+    periodicidade = request.args.get('periodicidade')
+    data_inicio = request.args.get('data_inicio')
+    data_fim = request.args.get('data_fim')
+    if not data_inicio or not data_fim:
+        inicio_mes, fim_mes = get_periodo('mensal', hoje_br())
+        data_inicio = data_inicio or inicio_mes.isoformat()
+        data_fim = data_fim or fim_mes.isoformat()
+
+    liderados_query = Usuario.query.filter(
+        Usuario.status == 'ativo',
+        Usuario.regional_id == regional_id,
+        Usuario.perfil.notin_(['admin', 'sr']),
+    )
+    if usuario_id:
+        liderados_query = liderados_query.filter(Usuario.id == usuario_id)
+    liderados = liderados_query.order_by(Usuario.nome).all()
+
+    cond = condicao_periodo_rotinas('todas', hoje_br(), data_inicio, data_fim, modo='intervalo')
+    if periodicidade and periodicidade != 'todas':
+        filtro_periodicidade = Rotina.periodicidade == periodicidade
+        cond = and_(cond, filtro_periodicidade) if cond is not None else filtro_periodicidade
+
+    linhas = []
+    totais = {'total': 0, 'concluidas': 0, 'pendentes': 0, 'atrasadas': 0}
+    for u in liderados:
+        query = Rotina.query.filter(Rotina.usuario_id == u.id)
+        if cond is not None:
+            query = query.filter(cond)
+        stats = _stats_liderado(query.all())
+        linhas.append({'usuario_id': u.id, 'nome': u.nome, 'perfil': u.perfil, **stats})
+        for chave in totais:
+            totais[chave] += stats[chave]
+    totais['percentual_execucao'] = round((totais['concluidas'] / totais['total'] * 100), 1) if totais['total'] else 0
+
+    linhas.sort(key=lambda x: x['percentual_execucao'], reverse=True)
+    resultado = {
+        'periodo_inicio': data_inicio, 'periodo_fim': data_fim,
+        'regional_id': regional_id, 'regional_nome': liderados[0].regional.nome if liderados and liderados[0].regional else None,
+        'liderados': linhas, 'totais': totais,
+    }
+    return resultado, None
+
+
+@rotinas_bp.route('/relatorio-liderados', methods=['GET'])
+@jwt_required()
+def relatorio_liderados():
+    """Relatório Comparativo das Rotinas dos Liderados (Seção 3): permite ao
+    Superintendente comparar, por colaborador, o percentual de execução e a
+    quantidade de atividades concluídas/pendentes/atrasadas num período — com
+    filtro por período e por colaborador."""
+    me = get_current_user()
+    if me.perfil not in ('admin', 'sr'):
+        return jsonify({'erro': 'Acesso negado'}), 403
+
+    resultado, erro = _montar_relatorio_liderados(me)
+    if erro:
+        return jsonify({'erro': erro}), 400
+    return jsonify(resultado)
+
+
+@rotinas_bp.route('/relatorio-liderados/export', methods=['GET'])
+@jwt_required()
+def exportar_relatorio_liderados():
+    me = get_current_user()
+    if me.perfil not in ('admin', 'sr'):
+        return jsonify({'erro': 'Acesso negado'}), 403
+
+    resultado, erro = _montar_relatorio_liderados(me)
+    if erro:
+        return jsonify({'erro': erro}), 400
+
+    formato = request.args.get('formato', 'csv').lower()
+    cabecalho = ['Colaborador', 'Perfil', 'Total', 'Concluídas', 'Pendentes', 'Atrasadas', '% Execução']
+    linhas = [[
+        l['nome'], l['perfil'], l['total'], l['concluidas'], l['pendentes'], l['atrasadas'],
+        f"{l['percentual_execucao']}%",
+    ] for l in resultado['liderados']]
+    linhas.append([
+        'TOTAL', '', resultado['totais']['total'], resultado['totais']['concluidas'],
+        resultado['totais']['pendentes'], resultado['totais']['atrasadas'], f"{resultado['totais']['percentual_execucao']}%",
+    ])
+
+    nome_base = f"comparativo_liderados_{resultado['periodo_inicio']}_a_{resultado['periodo_fim']}"
+    if formato == 'pdf':
+        return _export_pdf(
+            f'{nome_base}.pdf',
+            'Relatório Comparativo das Rotinas dos Liderados',
+            f"Regional: {resultado['regional_nome'] or '—'} · Período: {resultado['periodo_inicio']} a {resultado['periodo_fim']}",
+            cabecalho, linhas,
+        )
+    return _export_csv(f'{nome_base}.csv', cabecalho, linhas)
 
 
 @rotinas_bp.route('/pendencias', methods=['GET'])
@@ -1824,7 +2061,7 @@ def reprovar_atividade(rid):
     rotina.motivo_reprovacao = motivo
 
     # Conceder prazo extra ao colaborador para reenviar (data da reprovação + GRACE_DAYS_REENVIO)
-    rotina.prazo_reenvio = date.today() + timedelta(days=GRACE_DAYS_REENVIO)
+    rotina.prazo_reenvio = hoje_br() + timedelta(days=GRACE_DAYS_REENVIO)
     rotina.status = 'em_andamento'  # Reabrir para correção
 
     from backend.models import AprovacaoRotina
@@ -1885,7 +2122,7 @@ def reenviar_para_aprovacao(rid):
         return jsonify({'erro': 'Apenas atividades reprovadas podem ser reenviadas'}), 400
 
     # Verificar se o prazo de reenvio não expirou
-    if rotina.prazo_reenvio and rotina.prazo_reenvio < date.today():
+    if rotina.prazo_reenvio and rotina.prazo_reenvio < hoje_br():
         return jsonify({'erro': 'O prazo para reenvio desta atividade já expirou'}), 400
 
     # Validar requisitos de conclusão

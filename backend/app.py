@@ -10,6 +10,7 @@ from backend.routes.regionais import regionais_bp
 from backend.routes.empreendimentos import empreendimentos_bp
 from backend.routes.atividades import atividades_bp
 from backend.routes.rotinas import rotinas_bp, reconciliar_semanas_mes_atual
+from backend.routes.notificacoes import notificacoes_bp
 
 
 def _get_database_url():
@@ -58,6 +59,7 @@ def create_app():
     app.register_blueprint(empreendimentos_bp, url_prefix='/api/empreendimentos')
     app.register_blueprint(atividades_bp, url_prefix='/api/atividades')
     app.register_blueprint(rotinas_bp, url_prefix='/api/rotinas')
+    app.register_blueprint(notificacoes_bp, url_prefix='/api/notificacoes')
 
     # Frontend routes
     @app.route('/')
@@ -324,6 +326,8 @@ def _ensure_runtime_columns():
             db.session.execute(text("ALTER TABLE rotinas ADD COLUMN formulario_preenchido BOOLEAN DEFAULT FALSE"))
         if 'prazo_reenvio' not in existentes:
             db.session.execute(text("ALTER TABLE rotinas ADD COLUMN prazo_reenvio DATE"))
+        if 'responsavel_id' not in existentes:
+            db.session.execute(text("ALTER TABLE rotinas ADD COLUMN responsavel_id INTEGER REFERENCES usuarios(id)"))
 
     if 'aprovacoes_rotinas' in tabelas:
         existentes_ap = {col['name'] for col in insp.get_columns('aprovacoes_rotinas')}

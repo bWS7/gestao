@@ -2,11 +2,13 @@ import { Menu } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { PERFIL_LABELS } from '../../utils/constants';
 import Avatar from '../ui/Avatar';
+import NotificacoesBell from './NotificacoesBell';
 
 const PAGE_TITLES = {
   dashboard:      'Dashboard',
   rotinas:        'Minhas Rotinas',
   acompanhamento: 'Acompanhamento do Time',
+  comparativo_liderados: 'Comparativo Liderados',
   pendencias:     'Pendências',
   usuarios:       'Gestão de Usuários',
   regionais:      'Regionais',
@@ -38,6 +40,7 @@ export default function Header({ activePage, onToggleMobile }) {
 
       {/* Right */}
       <div className="flex items-center gap-3">
+        <NotificacoesBell />
         <div className="flex items-center gap-2.5">
           <Avatar src={currentUser?.foto_url} name={currentUser?.nome} size="sm" />
           <div className="hidden sm:block text-right">

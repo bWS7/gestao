@@ -142,7 +142,8 @@ export default function RotinaModal({ rotinaId, onClose, onSaved }) {
   const [comentario, setComentario] = useState('');
   const [justificativa, setJustificativa] = useState('');
   const [acaoCorretiva, setAcaoCorretiva] = useState('');
-  const [responsavel, setResponsavel] = useState('');
+  const [responsavelId, setResponsavelId] = useState('');
+  const [colegas, setColegas] = useState([]);
   const [novoPrazo, setNovoPrazo] = useState('');
   const [planoSemana, setPlanoSemana] = useState('');
   const [checklist, setChecklist] = useState('');
@@ -174,7 +175,7 @@ export default function RotinaModal({ rotinaId, onClose, onSaved }) {
         setComentario(d.comentario || '');
         setJustificativa(d.justificativa || '');
         setAcaoCorretiva(d.acao_corretiva || '');
-        setResponsavel(d.responsavel_acao || '');
+        setResponsavelId(d.responsavel_id ? String(d.responsavel_id) : '');
         setNovoPrazo(d.novo_prazo || '');
         setPlanoSemana(d.plano_semana || '');
         setChecklist(d.checklist || '');
@@ -190,6 +191,10 @@ export default function RotinaModal({ rotinaId, onClose, onSaved }) {
   }, [rotinaId]);
 
   useEffect(() => { loadRotina(); }, [loadRotina]);
+
+  useEffect(() => {
+    apiFetch('/api/usuarios/?status=ativo&escopo=delegacao').then(r => { if (r?.ok) setColegas(r.data); });
+  }, []);
 
   const isOverdue = !!rotina?.pendente_prazo;
   // Pendência: atividade obrigatória vencida (qualquer status) ou já marcada como
@@ -231,7 +236,7 @@ export default function RotinaModal({ rotinaId, onClose, onSaved }) {
     setSaving(true);
     const payload = {
       status, comentario, justificativa, acao_corretiva: acaoCorretiva,
-      responsavel_acao: responsavel, novo_prazo: novoPrazo || null,
+      responsavel_id: responsavelId || null, novo_prazo: novoPrazo || null,
       plano_semana: planoSemana, checklist, relatorio,
       visitas_ativacoes: visitas, resultados_visita: resultados,
       carteira_ativa: carteira, metas_canal: metas,
@@ -354,6 +359,25 @@ export default function RotinaModal({ rotinaId, onClose, onSaved }) {
           <Textarea label={planoObrigatorio ? 'Plano de Ação' : 'Plano da Semana'} value={planoSemana} onChange={e => setPlanoSemana(e.target.value)}
             rows={3} placeholder={planoObrigatorio ? 'Obrigatório: descreva o plano de ação para a atividade não realizada...' : 'Registre o plano da semana...'}
             disabled={!(canFill || canRegisterOverdue)} required={planoObrigatorio} />
+
+          <div>
+            <Select
+              label="Responsável pela Ação"
+              value={responsavelId}
+              onChange={e => setResponsavelId(e.target.value)}
+              disabled={!(canFill || canRegisterOverdue)}
+            >
+              <option value="">Nenhum (eu mesmo cuido)</option>
+              {colegas.map(u => (
+                <option key={u.id} value={u.id}>{u.nome}{u.id === currentUser?.id ? ' (eu)' : ''}</option>
+              ))}
+            </Select>
+            {responsavelId && Number(responsavelId) !== currentUser?.id && (
+              <p className="text-xs text-gray-400 mt-1">
+                A pessoa selecionada recebe uma notificação e pode acompanhar esta atividade até concluí-la.
+              </p>
+            )}
+          </div>
 
           <div className="border-t border-gray-100 pt-5">
             <div className="flex items-center gap-2 mb-3">

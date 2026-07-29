@@ -77,7 +77,14 @@ def listar():
     me = get_current_user()
     query = Usuario.query
 
-    if me.perfil == 'sr':
+    # escopo=delegacao: usado só pelo seletor de "Responsável pela Ação" (ver
+    # Seção 4 — notificação de atividade delegada). Sem essa flag, gv/cd/sp só
+    # enxergam a si mesmos (regra de visibilidade original); com ela, também
+    # veem os colegas da própria regional — precisam disso pra ter alguém a
+    # quem delegar, mas continuam sem acesso à listagem ampla de usuários.
+    escopo_delegacao = request.args.get('escopo') == 'delegacao'
+
+    if me.perfil == 'sr' or (escopo_delegacao and me.regional_id):
         query = query.filter_by(regional_id=me.regional_id)
     elif me.perfil not in ['admin']:
         query = query.filter_by(id=me.id)

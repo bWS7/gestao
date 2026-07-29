@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, ClipboardList, AlertCircle, Users, Map,
-  BookOpen, Shield, LogOut, User, Activity, TrendingUp, Menu, Timer, FileBarChart, Building2
+  BookOpen, Shield, LogOut, User, Activity, TrendingUp, Menu, Timer, FileBarChart, Building2, Users2
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { PERFIL_LABELS } from '../../utils/constants';
@@ -22,6 +22,7 @@ const NAV_SECTIONS = {
     label: 'Gestão',
     items: [
       { id: 'acompanhamento', label: 'Acompanhamento',   icon: TrendingUp,       roles: ['admin', 'sr'] },
+      { id: 'comparativo_liderados', label: 'Comparativo Liderados', icon: Users2, roles: ['admin', 'sr'] },
     ],
   },
   admin: {

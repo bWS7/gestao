@@ -11,3 +11,5 @@ Werkzeug==3.0.3
 SQLAlchemy==2.0.31
 alembic==1.13.2
 python-dateutil==2.9.0.post0
+tzdata==2024.1
+reportlab==4.2.2

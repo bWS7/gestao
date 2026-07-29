@@ -1,5 +1,5 @@
 from datetime import datetime, timezone, timedelta
-from backend.utils.dates import get_now_br
+from backend.utils.dates import get_now_br, hoje_br
 from backend.extensions import db
 import bcrypt
 import json
@@ -174,6 +174,7 @@ class Rotina(db.Model):
     acao_corretiva = db.Column(db.Text)
     novo_prazo = db.Column(db.Date)
     responsavel_acao = db.Column(db.String(150))
+    responsavel_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
     checklist = db.Column(db.Text)
     relatorio = db.Column(db.Text)
     plano_semana = db.Column(db.Text)
@@ -195,6 +196,7 @@ class Rotina(db.Model):
     historico = db.relationship('HistoricoRotina', backref='rotina', lazy=True)
     aprovador = db.relationship('Usuario', foreign_keys=[aprovador_id], lazy=True)
     aprovacoes = db.relationship('AprovacaoRotina', backref='rotina', lazy=True)
+    responsavel = db.relationship('Usuario', foreign_keys=[responsavel_id], lazy=True)
 
     @property
     def prazo_limite(self):
@@ -264,6 +266,8 @@ class Rotina(db.Model):
             'acao_corretiva': self.acao_corretiva,
             'novo_prazo': self.novo_prazo.isoformat() if self.novo_prazo else None,
             'responsavel_acao': self.responsavel_acao,
+            'responsavel_id': self.responsavel_id,
+            'responsavel_nome': self.responsavel.nome if self.responsavel else None,
             'checklist': self.checklist,
             'relatorio': self.relatorio,
             'plano_semana': self.plano_semana,
@@ -283,7 +287,7 @@ class Rotina(db.Model):
                 self.atividade.obrigatoria
                 and self.status in ['nao_iniciada', 'em_andamento']
                 and prazo_limite
-                and prazo_limite < datetime.now(timezone.utc).date()
+                and prazo_limite < hoje_br()
             ) if self.atividade else False,
             # Vencida = obrigatória cujo prazo já passou (qualquer status). Usada
             # para tratar a atividade como pendência mesmo já marcada "não realizada".
@@ -291,12 +295,12 @@ class Rotina(db.Model):
                 self.atividade
                 and self.atividade.obrigatoria
                 and prazo_limite
-                and prazo_limite < datetime.now(timezone.utc).date()
+                and prazo_limite < hoje_br()
             ) if self.atividade else False,
             # Período gerado antecipadamente (painel de aderência mensal) mas
             # que ainda não começou — bloqueada pra edição/conclusão até chegar.
             'ainda_nao_liberada': bool(
-                self.periodo_inicio and self.periodo_inicio > datetime.now(timezone.utc).date()
+                self.periodo_inicio and self.periodo_inicio > hoje_br()
             ),
             'evidencias': [e.to_dict() for e in self.evidencias],
             'criado_em': self.criado_em.replace(tzinfo=timezone.utc).isoformat() if self.criado_em else None,
@@ -433,4 +437,40 @@ class FechamentoPeriodo(db.Model):
             'concluidas': self.concluidas,
             'percentual_execucao': self.percentual_execucao,
             'fechado_em': self.fechado_em.replace(tzinfo=timezone.utc).isoformat() if self.fechado_em else None,
+        }
+
+
+class Notificacao(db.Model):
+    """Notificação in-app para o usuário designado como responsável por uma
+    atividade delegada por outra pessoa (ex.: Plano de Ação de uma Rotina cujo
+    responsavel_id difere do dono/criador). Fica não lida até o destinatário
+    abrir a atividade referenciada ou ela ser concluída."""
+    __tablename__ = 'notificacoes'
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=False)  # destinatário
+    criado_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    tipo = db.Column(db.String(50), nullable=False, default='atividade_delegada')
+    titulo = db.Column(db.String(200), nullable=False)
+    mensagem = db.Column(db.Text)
+    rotina_id = db.Column(db.Integer, db.ForeignKey('rotinas.id'), nullable=True)
+    lida = db.Column(db.Boolean, default=False)
+    lida_em = db.Column(db.DateTime)
+    criado_em = db.Column(db.DateTime, default=get_now_br)
+    usuario = db.relationship('Usuario', foreign_keys=[usuario_id], lazy=True)
+    criado_por = db.relationship('Usuario', foreign_keys=[criado_por_id], lazy=True)
+    rotina = db.relationship('Rotina', foreign_keys=[rotina_id], lazy=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'tipo': self.tipo,
+            'titulo': self.titulo,
+            'mensagem': self.mensagem,
+            'rotina_id': self.rotina_id,
+            'atividade_nome': self.rotina.atividade.nome if self.rotina and self.rotina.atividade else None,
+            'criado_por_id': self.criado_por_id,
+            'criado_por_nome': self.criado_por.nome if self.criado_por else None,
+            'lida': self.lida,
+            'lida_em': self.lida_em.replace(tzinfo=timezone.utc).isoformat() if self.lida_em else None,
+            'criado_em': self.criado_em.replace(tzinfo=timezone.utc).isoformat() if self.criado_em else None,
         }
