@@ -98,7 +98,11 @@ function SectionTitle({ number, title }) {
 }
 
 function Section({ children }) {
-  return <div className="border border-gray-100 rounded-xl p-4 space-y-3 overflow-hidden">{children}</div>;
+  // Sem overflow-hidden: campos com dropdown flutuante (SearchableSelect, ex.
+  // Empreendimento) precisam poder estourar a caixa da seção pra baixo — com
+  // overflow-hidden aqui, a lista de opções ficava cortada/invisível sempre
+  // que o campo estava perto do fim da seção (só a barra de busca aparecia).
+  return <div className="border border-gray-100 rounded-xl p-4 space-y-3">{children}</div>;
 }
 
 function DynamicTable({ columns, rows, onAdd, onRemove, onChange, readOnly, addLabel, optional }) {

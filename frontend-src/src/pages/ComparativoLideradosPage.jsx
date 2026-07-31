@@ -1,14 +1,91 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Download, FileText, Users2 } from 'lucide-react';
+import { Download, FileText, Users2, TrendingUp } from 'lucide-react';
 import { apiFetch, downloadExport } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { Modal } from '../components/ui/Modal';
 import { Card } from '../components/ui/Card';
 import { Table, Thead, Th, Tbody, Tr, Td } from '../components/ui/Table';
 import { Input, Select } from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import { EmptyState, PageSpinner } from '../components/ui/Spinner';
-import { PERFIL_LABELS } from '../utils/constants';
+import Pagination, { usePagination } from '../components/ui/Pagination';
+import { StatusBadge, PeriodoBadge } from '../components/ui/Badge';
+import { PERFIL_LABELS, STATUS_LABELS, PERIODO_LABELS, fmtDate, fmtDatetime } from '../utils/constants';
+import RotinaModal from '../components/shared/RotinaModal';
+
+const ATIVIDADES_PER_PAGE = 15;
+
+// Lista paginada das atividades de UM liderado no período/filtros vigentes na
+// tela — aberta ao clicar no nome do colaborador, pra o Superintendente/admin
+// ver exatamente o que está sendo feito sem precisar sair do comparativo.
+function AtividadesLideradoModal({ liderado, dataInicio, dataFim, periodicidade, onClose }) {
+  const [rotinas, setRotinas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [openId, setOpenId] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    let url = `/api/rotinas/?usuario_id=${liderado.usuario_id}&periodo=todas&historico=1&data_inicio=${dataInicio}&data_fim=${dataFim}`;
+    if (periodicidade && periodicidade !== 'todas') url += `&periodicidade=${periodicidade}`;
+    const r = await apiFetch(url);
+    if (r?.ok) setRotinas(r.data);
+    setLoading(false);
+  }, [liderado.usuario_id, dataInicio, dataFim, periodicidade]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const { page, setPage, pages, total, slice } = usePagination(rotinas, ATIVIDADES_PER_PAGE, rotinas);
+
+  return (
+    <>
+      <Modal open onClose={onClose} title={`Atividades de ${liderado.nome}`} size="xl">
+        {loading ? (
+          <PageSpinner />
+        ) : rotinas.length === 0 ? (
+          <EmptyState icon={TrendingUp} title="Nenhuma atividade no período" description="Ajuste o período ou a periodicidade para ver outras atividades." />
+        ) : (
+          <div className="-mx-4 sm:-mx-6">
+            <Table>
+              <Thead>
+                <tr>
+                  <Th>Atividade</Th>
+                  <Th>Periodicidade</Th>
+                  <Th>Período</Th>
+                  <Th>Status</Th>
+                  <Th>Conclusão</Th>
+                </tr>
+              </Thead>
+              <Tbody>
+                {slice.map(r => (
+                  <Tr key={r.id} onClick={() => setOpenId(r.id)}>
+                    <Td className="max-w-[240px]">
+                      <span className="font-medium text-gray-700 line-clamp-2">{r.atividade_nome}</span>
+                    </Td>
+                    <Td><PeriodoBadge periodo={r.periodicidade} label={PERIODO_LABELS[r.periodicidade]} /></Td>
+                    <Td><span className="text-xs text-gray-500 whitespace-nowrap">{fmtDate(r.periodo_inicio)} → {fmtDate(r.periodo_fim)}</span></Td>
+                    <Td>
+                      <div className="flex flex-col gap-1">
+                        <StatusBadge status={r.status} label={STATUS_LABELS[r.status]} />
+                        {r.vencida && r.status !== 'concluida' && (
+                          <span className="text-[10px] font-medium text-error">Atrasada</span>
+                        )}
+                      </div>
+                    </Td>
+                    <Td><span className="text-xs text-gray-500">{r.data_conclusao ? fmtDatetime(r.data_conclusao) : '—'}</span></Td>
+                  </Tr>
+                ))}
+              </Tbody>
+            </Table>
+            <Pagination page={page} pages={pages} total={total} perPage={ATIVIDADES_PER_PAGE} onChange={setPage} />
+          </div>
+        )}
+      </Modal>
+
+      <RotinaModal rotinaId={openId} onClose={() => setOpenId(null)} onSaved={load} />
+    </>
+  );
+}
 
 function primeiroDiaMes() {
   const hoje = new Date();
@@ -41,6 +118,7 @@ export default function ComparativoLideradosPage() {
   const [periodicidade, setPeriodicidade] = useState('todas');
   const [dataInicio, setDataInicio] = useState(primeiroDiaMes());
   const [dataFim, setDataFim] = useState(ultimoDiaMes());
+  const [lideradoAberto, setLideradoAberto] = useState(null);
 
   // Admin não tem regional própria (diferente do Superintendente, que o
   // backend já resolve sozinho) — precisa escolher qual regional comparar.
@@ -165,7 +243,7 @@ export default function ComparativoLideradosPage() {
                 </Thead>
                 <Tbody>
                   {liderados.map(l => (
-                    <Tr key={l.usuario_id}>
+                    <Tr key={l.usuario_id} onClick={() => setLideradoAberto(l)}>
                       <Td>
                         <div className="font-medium text-gray-800">{l.nome}</div>
                         <div className="text-xs text-gray-400">{PERFIL_LABELS[l.perfil] || l.perfil}</div>
@@ -187,6 +265,16 @@ export default function ComparativoLideradosPage() {
             )}
           </Card>
         </>
+      )}
+
+      {lideradoAberto && (
+        <AtividadesLideradoModal
+          liderado={lideradoAberto}
+          dataInicio={dataInicio}
+          dataFim={dataFim}
+          periodicidade={periodicidade}
+          onClose={() => setLideradoAberto(null)}
+        />
       )}
     </div>
   );
