@@ -5,6 +5,46 @@ import { CHECKLIST_STAND_ITENS, emptyChecklistEmpreendimento,
   emptyCorretorAlinhamento, emptyTreinamentoParceiro, emptyReuniaoStandBloco,
   emptyIndicadorSemanal, emptyIndicadorTime } from './reportConfigs';
 import EmpreendimentoSelect, { EmpreendimentosDatalist } from './EmpreendimentoSelect';
+import { useColegas } from './ColegasContext';
+
+// Select de "Responsável" vinculado a um usuário real da regional — em vez de
+// texto livre, reaproveitado por toda coluna/campo "responsavel" dos relatórios.
+// Chama onSelect(id, nome) para o chamador gravar as duas coisas: `nome`
+// (mantém a exibição/exportação exatamente como já era — texto solto) e
+// `responsavel_id` (novo, é o que permite notificar a pessoa escolhida — ver
+// Seção 4 / notificar_delegacoes_formulario no backend).
+export function ResponsavelSelect({ idValue, nomeValue, onSelect, disabled, required, className, label }) {
+  const colegas = useColegas();
+  // Compat: relatórios salvos antes desta mudança só têm o nome em texto,
+  // sem id. Se bater exatamente com um colega atual, resolve o id de volta
+  // (e o próximo salvamento já grava o id certinho); senão fica em branco.
+  const idResolvido = idValue ?? colegas.find(u => u.nome === nomeValue)?.id ?? '';
+  const handleChange = e => {
+    const id = e.target.value ? Number(e.target.value) : null;
+    const nome = colegas.find(u => u.id === id)?.nome || '';
+    onSelect(id, nome);
+  };
+  const options = (
+    <>
+      <option value="">Selecione...</option>
+      {colegas.map(u => <option key={u.id} value={u.id}>{u.nome}</option>)}
+    </>
+  );
+  const value = idResolvido === '' ? '' : String(idResolvido);
+
+  if (label) {
+    return (
+      <Select label={label} value={value} onChange={handleChange} disabled={disabled} required={required}>
+        {options}
+      </Select>
+    );
+  }
+  return (
+    <select className={className} value={value} onChange={handleChange} disabled={disabled} required={required}>
+      {options}
+    </select>
+  );
+}
 
 // id do <datalist> compartilhado de empreendimentos ativos (para células de tabela)
 const EMP_LIST_ID = 'empreendimentos-ativos';
@@ -81,7 +121,14 @@ function DynamicTable({ columns, rows, onAdd, onRemove, onChange, readOnly, addL
               <tr key={i} className="border-b border-gray-50">
                 {columns.map(c => (
                   <td key={c.key} className="pr-2 py-1.5">
-                    {c.type === 'select' ? (
+                    {c.key === 'responsavel' ? (
+                      <ResponsavelSelect
+                        className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary-400 disabled:bg-gray-50"
+                        idValue={row.responsavel_id} nomeValue={row[c.key]}
+                        onSelect={(id, nome) => { onChange(i, 'responsavel_id', id); onChange(i, c.key, nome); }}
+                        disabled={readOnly} required={!optional}
+                      />
+                    ) : c.type === 'select' ? (
                       <select
                         className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary-400 disabled:bg-gray-50"
                         value={row[c.key] || ''} onChange={e => onChange(i, c.key, e.target.value)} disabled={readOnly}
@@ -597,8 +644,10 @@ export function FormChecklistStand({ form, set, setList, addItem, removeItem, re
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Input type="date" label="Data da execução" value={form.data_execucao}
             onChange={e => set('data_execucao', e.target.value)} disabled={readOnly} required />
-          <Input label="Responsável pela verificação" value={form.responsavel}
-            onChange={e => set('responsavel', e.target.value)} disabled={readOnly} required />
+          <ResponsavelSelect label="Responsável pela verificação"
+            idValue={form.responsavel_id} nomeValue={form.responsavel}
+            onSelect={(id, nome) => { set('responsavel_id', id); set('responsavel', nome); }}
+            disabled={readOnly} required />
         </div>
       </Section>
 
@@ -1031,8 +1080,10 @@ export function FormFunilVendas({ form, set, readOnly }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Input label="Principal etapa de perda do funil" value={form.etapa_perda}
             onChange={e => set('etapa_perda', e.target.value)} disabled={readOnly} required />
-          <Input label="Responsável pela ação" value={form.responsavel_acao}
-            onChange={e => set('responsavel_acao', e.target.value)} disabled={readOnly} required />
+          <ResponsavelSelect label="Responsável pela ação"
+            idValue={form.responsavel_id} nomeValue={form.responsavel_acao}
+            onSelect={(id, nome) => { set('responsavel_id', id); set('responsavel_acao', nome); }}
+            disabled={readOnly} required />
         </div>
         <Textarea label="Motivo predominante das perdas" value={form.motivo_perdas}
           onChange={e => set('motivo_perdas', e.target.value)} rows={3} disabled={readOnly} required />
@@ -1129,7 +1180,10 @@ export function FormAlinhamentoIndividual({ form, setList, addItem, removeItem, 
                 </div>
                 <Textarea label="Ação definida" value={c.acao_definida} onChange={e => upd('acao_definida', e.target.value)} rows={2} disabled={readOnly} required />
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <Input label="Responsável" value={c.responsavel} onChange={e => upd('responsavel', e.target.value)} disabled={readOnly} required />
+                  <ResponsavelSelect label="Responsável"
+                    idValue={c.responsavel_id} nomeValue={c.responsavel}
+                    onSelect={(id, nome) => { upd('responsavel_id', id); upd('responsavel', nome); }}
+                    disabled={readOnly} required />
                   <Input type="date" label="Data do próximo acompanhamento" value={c.proximo_acompanhamento} onChange={e => upd('proximo_acompanhamento', e.target.value)} disabled={readOnly} required />
                 </div>
               </div>

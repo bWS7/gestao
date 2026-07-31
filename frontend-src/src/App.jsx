@@ -16,6 +16,7 @@ import AuditoriaPage from './pages/AuditoriaPage';
 import MetricasAprovacaoPage from './pages/MetricasAprovacaoPage';
 import RelatoriosPreenchimentoPage from './pages/RelatoriosPreenchimentoPage';
 import ComparativoLideradosPage from './pages/ComparativoLideradosPage';
+import NotificacoesPage from './pages/NotificacoesPage';
 import MeuPerfil from './pages/MeuPerfil';
 
 const PAGES = {
@@ -33,6 +34,7 @@ const PAGES = {
   metricas_aprovacao:   MetricasAprovacaoPage,
   relatorios:           RelatoriosPreenchimentoPage,
   comparativo_liderados: ComparativoLideradosPage,
+  notificacoes:         NotificacoesPage,
 };
 
 // Role-based access

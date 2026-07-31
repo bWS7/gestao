@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, ClipboardList, AlertCircle, Users, Map,
-  BookOpen, Shield, LogOut, User, Activity, TrendingUp, Menu, Timer, FileBarChart, Building2, Users2
+  BookOpen, Shield, LogOut, User, Activity, TrendingUp, Menu, Timer, FileBarChart, Building2, Users2, Bell
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { PERFIL_LABELS } from '../../utils/constants';
@@ -14,6 +14,7 @@ const NAV_SECTIONS = {
     items: [
       { id: 'dashboard',            label: 'Dashboard',          icon: LayoutDashboard,  roles: ['admin', 'sr'] },
       { id: 'rotinas',              label: 'Minhas Rotinas',     icon: ClipboardList,    roles: null },
+      { id: 'notificacoes',         label: 'Notificações',       icon: Bell,             roles: null },
       { id: 'pendencias',           label: 'Pendências',         icon: AlertCircle,      roles: null },
       { id: 'pendencias_aprovacao', label: 'Aprovações',         icon: Activity,         roles: ['admin', 'sr'] },
     ],

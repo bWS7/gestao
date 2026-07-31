@@ -7,7 +7,7 @@ import RotinaModal from '../shared/RotinaModal';
 
 const POLL_MS = 30000;
 
-export default function NotificacoesBell() {
+export default function NotificacoesBell({ onVerTodas }) {
   const [aberto, setAberto] = useState(false);
   const [contagem, setContagem] = useState(0);
   const [notificacoes, setNotificacoes] = useState([]);
@@ -120,6 +120,12 @@ export default function NotificacoesBell() {
                 ))
               )}
             </div>
+            <button
+              onClick={() => { setAberto(false); onVerTodas?.(); }}
+              className="w-full text-center py-2.5 text-xs font-medium text-primary-600 hover:bg-gray-50 border-t border-gray-100 transition-colors"
+            >
+              Ver todas as notificações
+            </button>
           </motion.div>
         )}
       </AnimatePresence>

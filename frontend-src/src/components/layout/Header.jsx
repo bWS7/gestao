@@ -9,6 +9,7 @@ const PAGE_TITLES = {
   rotinas:        'Minhas Rotinas',
   acompanhamento: 'Acompanhamento do Time',
   comparativo_liderados: 'Comparativo Liderados',
+  notificacoes: 'Notificações',
   pendencias:     'Pendências',
   usuarios:       'Gestão de Usuários',
   regionais:      'Regionais',
@@ -17,7 +18,7 @@ const PAGE_TITLES = {
   auditoria:      'Auditoria',
 };
 
-export default function Header({ activePage, onToggleMobile }) {
+export default function Header({ activePage, onToggleMobile, onNavigate }) {
   const { currentUser } = useAuth();
   const title = PAGE_TITLES[activePage] || activePage;
 
@@ -40,7 +41,7 @@ export default function Header({ activePage, onToggleMobile }) {
 
       {/* Right */}
       <div className="flex items-center gap-3">
-        <NotificacoesBell />
+        <NotificacoesBell onVerTodas={() => onNavigate?.('notificacoes')} />
         <div className="flex items-center gap-2.5">
           <Avatar src={currentUser?.foto_url} name={currentUser?.nome} size="sm" />
           <div className="hidden sm:block text-right">

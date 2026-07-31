@@ -7,6 +7,7 @@ import { Select, Input, Textarea } from '../ui/Input';
 import Button from '../ui/Button';
 import { getReportType, REPORT_TITLES, REPORT_OBJECTIVES, buildEmptyForm, validateRequiredReport, normalizeLoadedForm } from './reportConfigs';
 import EmpreendimentoSelect from './EmpreendimentoSelect';
+import { ColegasProvider } from './ColegasContext';
 import {
   FormReuniaoPerformance, FormResultadoSemanal, FormDecoesCanal,
   FormAnaliseRiscos, FormAcompanhamentoLiderados, FormComiteMensal,
@@ -16,6 +17,7 @@ import {
   FormAnaliseConcorrencia, FormRelatorioMensalEmp,
   FormFunilVendas, FormPerformanceCorretores, FormAlinhamentoIndividual,
   FormTreinamentoTime, FormMonitoramentoRotinas, FormResultadoGeralTime,
+  ResponsavelSelect,
 } from './ReportForms';
 
 // ── Legacy constants (for padrao report) ─────────────────────
@@ -188,7 +190,14 @@ function LegacyForm({ form, set, setResultado, setParticipante, addParticipante,
               {form.plano_acao.map((a, i) => (
                 <tr key={i} className="border-b border-gray-50">
                   <td className="pr-2 py-1.5"><input className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary-400 disabled:bg-gray-50" value={a.acao} onChange={e => setAcao(i, 'acao', e.target.value)} disabled={readOnly} /></td>
-                  <td className="pr-2 py-1.5"><input className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary-400 disabled:bg-gray-50" value={a.responsavel} onChange={e => setAcao(i, 'responsavel', e.target.value)} disabled={readOnly} /></td>
+                  <td className="pr-2 py-1.5">
+                    <ResponsavelSelect
+                      className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary-400 disabled:bg-gray-50"
+                      idValue={a.responsavel_id} nomeValue={a.responsavel}
+                      onSelect={(id, nome) => { setAcao(i, 'responsavel_id', id); setAcao(i, 'responsavel', nome); }}
+                      disabled={readOnly}
+                    />
+                  </td>
                   <td className="pr-2 py-1.5"><input type="date" className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary-400 disabled:bg-gray-50" value={a.prazo} onChange={e => setAcao(i, 'prazo', e.target.value)} disabled={readOnly} /></td>
                   <td className="pr-2 py-1.5"><select className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary-400 disabled:bg-gray-50" value={a.prioridade} onChange={e => setAcao(i, 'prioridade', e.target.value)} disabled={readOnly}>{PRIORIDADES.map(p => <option key={p} value={p}>{p}</option>)}</select></td>
                   <td className="pr-2 py-1.5"><select className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary-400 disabled:bg-gray-50" value={a.status} onChange={e => setAcao(i, 'status', e.target.value)} disabled={readOnly}>{STATUS_ACAO.map(s => <option key={s} value={s}>{s}</option>)}</select></td>
@@ -237,6 +246,13 @@ export default function FormularioComercialModal({ rotinaId, rotina, currentUser
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(null);
+  const [colegas, setColegas] = useState([]);
+
+  // Colegas da regional do usuário logado — usados por todo campo
+  // "Responsável" dos relatórios (vira uma lista de vinculação, não texto livre).
+  useEffect(() => {
+    apiFetch('/api/usuarios/?status=ativo&escopo=delegacao').then(r => { if (r?.ok) setColegas(r.data); });
+  }, []);
 
   const reportType = getReportType(rotina?.atividade_nome, rotina?.perfil || currentUser?.perfil);
   const isCustom = reportType !== 'padrao';
@@ -329,6 +345,7 @@ export default function FormularioComercialModal({ rotinaId, rotina, currentUser
   const formProps = { form, set, setList, addItem, removeItem, readOnly };
 
   return (
+    <ColegasProvider value={colegas}>
     <Modal
       open onClose={onClose} title={title} size="xl"
       footer={readOnly
@@ -380,5 +397,6 @@ export default function FormularioComercialModal({ rotinaId, rotina, currentUser
         />
       )}
     </Modal>
+    </ColegasProvider>
   );
 }

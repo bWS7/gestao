@@ -34,7 +34,13 @@ def can_access_rotina(me, rotina):
         return True
     if me.perfil == 'sr':
         return rotina.usuario and rotina.usuario.regional_id == me.regional_id
-    return rotina.usuario_id == me.id
+    if rotina.usuario_id == me.id:
+        return True
+    # Foi delegado num item do Relatório Comercial (plano de ação, riscos,
+    # etc.) sem ser o responsavel_id "oficial" da rotina — ainda assim
+    # recebeu notificação, então precisa poder abrir a atividade a partir
+    # dela (ver salvar_formulario / área de Notificações).
+    return Notificacao.query.filter_by(rotina_id=rotina.id, usuario_id=me.id).first() is not None
 
 
 def can_edit_rotina(me, rotina):
@@ -56,13 +62,12 @@ def add_rotina_history(rotina, usuario_id, acao, observacao=None, status_anterio
     db.session.add(hist)
 
 
-def notificar_delegacao(rotina, ator):
-    """Cria a notificação de atividade delegada (Seção 4) quando o
-    responsavel_id de uma rotina é definido para alguém diferente do dono da
-    atividade e de quem está fazendo a alteração. Evita duplicar: se já existe
-    uma notificação não lida desta rotina para esse mesmo destinatário, não
-    cria outra (só quando o responsável muda de fato pra outra pessoa)."""
-    destinatario_id = rotina.responsavel_id
+def _criar_notificacao_delegacao(rotina, destinatario_id, ator, contexto):
+    """Cria a notificação de atividade delegada (Seção 4) pra um destinatário,
+    se ainda não houver uma não lida desta mesma rotina pra ele — evita
+    duplicar notificação a cada novo salvamento enquanto o responsável não
+    muda de fato. `contexto` identifica de onde veio a delegação na mensagem
+    ("...responsável por {contexto} na atividade...")."""
     if not destinatario_id or destinatario_id == rotina.usuario_id:
         return
     ja_existe = Notificacao.query.filter_by(
@@ -71,14 +76,53 @@ def notificar_delegacao(rotina, ator):
     if ja_existe:
         return
     nome_atividade = rotina.atividade.nome if rotina.atividade else 'uma atividade'
+    nome_ator = ator.nome if ator else (rotina.usuario.nome if rotina.usuario else 'Alguém')
     db.session.add(Notificacao(
         usuario_id=destinatario_id,
         criado_por_id=ator.id if ator else rotina.usuario_id,
         tipo='atividade_delegada',
         titulo=f'Você foi designado responsável: {nome_atividade}',
-        mensagem=f'{ator.nome if ator else rotina.usuario.nome} definiu você como responsável pela ação em "{nome_atividade}" ({rotina.usuario.nome if rotina.usuario else "—"}).',
+        mensagem=f'{nome_ator} definiu você como responsável por {contexto} na atividade "{nome_atividade}" ({rotina.usuario.nome if rotina.usuario else "—"}).',
         rotina_id=rotina.id,
     ))
+
+
+def notificar_delegacao(rotina, ator):
+    """Notificação de delegação do campo oficial da rotina (responsavel_id —
+    "Responsável pela Ação" no RotinaModal)."""
+    _criar_notificacao_delegacao(rotina, rotina.responsavel_id, ator, 'esta ação')
+
+
+def _extrair_responsavel_ids(no):
+    """Varre recursivamente o JSON do Relatório Comercial (formato varia por
+    tipo de relatório: listas de plano de ação, riscos, blocos repetíveis,
+    campos únicos) coletando todo usuario_id atribuído a um campo
+    "Responsável" — reconhecido pela chave literal 'responsavel_id' em
+    qualquer nível. Usado para notificar quem foi delegado dentro do
+    relatório (Seção 4), não só no campo oficial da rotina."""
+    ids = set()
+    if isinstance(no, dict):
+        valor = no.get('responsavel_id')
+        if valor:
+            try:
+                ids.add(int(valor))
+            except (TypeError, ValueError):
+                pass
+        for v in no.values():
+            ids |= _extrair_responsavel_ids(v)
+    elif isinstance(no, list):
+        for item in no:
+            ids |= _extrair_responsavel_ids(item)
+    return ids
+
+
+def notificar_delegacoes_formulario(rotina, formulario, ator):
+    """Notifica cada usuário distinto encontrado como responsável em algum
+    campo/linha do Relatório Comercial recém-salvo (ver _extrair_responsavel_ids)."""
+    for destinatario_id in _extrair_responsavel_ids(formulario):
+        if destinatario_id == ator.id:
+            continue
+        _criar_notificacao_delegacao(rotina, destinatario_id, ator, 'um item do relatório')
 
 
 def marcar_notificacoes_lidas_por_rotina(rotina, usuario_id=None):
@@ -792,10 +836,11 @@ def obter(rid):
     r = Rotina.query.get_or_404(rid)
     if not can_access_rotina(me, r):
         return jsonify({'erro': 'Acesso negado'}), 403
-    # Visualizar a atividade já "lê" a notificação de delegação recebida por
-    # este usuário (a notificação some ao ser visualizada, sem exigir ação
-    # explícita — ver Seção 4).
-    if r.responsavel_id == me.id and marcar_notificacoes_lidas_por_rotina(r, usuario_id=me.id):
+    # Visualizar a atividade já "lê" qualquer notificação de delegação que
+    # este usuário tenha recebido dela — seja pelo campo oficial (responsavel_id
+    # da rotina) ou por um item do Relatório Comercial — sem exigir ação
+    # explícita (ver Seção 4).
+    if marcar_notificacoes_lidas_por_rotina(r, usuario_id=me.id):
         db.session.commit()
     return jsonify(r.to_dict())
 
@@ -2194,6 +2239,11 @@ def salvar_formulario(rid):
     formulario = data.get('formulario', {})
     r.formulario_comercial = json.dumps(formulario, ensure_ascii=False)
     r.formulario_preenchido = True
+
+    # Notifica quem foi selecionado como "Responsável" em qualquer campo/linha
+    # do relatório (Seção 4) — não confundir com o responsavel_id oficial da
+    # rotina (RotinaModal), notificado separadamente em atualizar().
+    notificar_delegacoes_formulario(r, formulario, me)
 
     add_rotina_history(r, me.id, 'atualizacao_rotina',
                        observacao='Relatório Comercial preenchido',

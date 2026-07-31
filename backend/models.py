@@ -468,6 +468,7 @@ class Notificacao(db.Model):
             'mensagem': self.mensagem,
             'rotina_id': self.rotina_id,
             'atividade_nome': self.rotina.atividade.nome if self.rotina and self.rotina.atividade else None,
+            'rotina_usuario_nome': self.rotina.usuario.nome if self.rotina and self.rotina.usuario else None,
             'criado_por_id': self.criado_por_id,
             'criado_por_nome': self.criado_por.nome if self.criado_por else None,
             'lida': self.lida,

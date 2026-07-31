@@ -24,6 +24,7 @@ export default function AppLayout({ activePage, onNavigate, children }) {
         <Header
           activePage={activePage}
           onToggleMobile={() => setMobileOpen(prev => !prev)}
+          onNavigate={onNavigate}
         />
         <main className="flex-1 overflow-y-auto">
           <AnimatePresence mode="wait">
