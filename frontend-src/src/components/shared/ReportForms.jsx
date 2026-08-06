@@ -70,9 +70,16 @@ function AutoTextareaCell({ className = '', value, onChange, ...props }) {
   }, []);
   useLayoutEffect(() => {
     grow();
-    if (typeof document !== 'undefined' && document.fonts?.status !== 'loaded') {
-      document.fonts?.ready?.then(grow);
-    }
+    // Remedição no próximo paint, sempre — document.fonts.status já pode
+    // reportar 'loaded' antes da fonte usada NESTE textarea específico
+    // realmente refletir no layout (foi o que causava a caixa ficar baixa
+    // demais de forma intermitente: a 1ª medição, com a fonte de fallback
+    // mais estreita, "cabia" menos linhas do que o necessário). requestAnimationFrame
+    // não depende desse status e sempre confere depois que o navegador
+    // termina de assentar o layout real.
+    const raf = requestAnimationFrame(grow);
+    document.fonts?.ready?.then(grow);
+    return () => cancelAnimationFrame(raf);
   }, [value, grow]);
   return (
     <textarea

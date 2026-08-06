@@ -46,13 +46,17 @@ export const Textarea = forwardRef(function Textarea({ label, error, className =
   }, []);
 
   // Reajusta quando o valor muda externamente (carregar relatório, reset, etc.).
-  // Recalcula também após o carregamento das fontes, pois a altura depende das
-  // métricas da fonte final (evita texto cortado ao abrir um relatório salvo).
+  // Recalcula de novo no próximo paint e após o carregamento das fontes: a
+  // 1ª medição pode sair baixa demais se a fonte final ainda não tiver sido
+  // aplicada nesse instante (document.fonts.status já pode dizer 'loaded'
+  // antes da fonte usada aqui realmente refletir no layout — por isso
+  // dependia só disso ainda cortava texto de forma intermitente ao abrir um
+  // relatório salvo). requestAnimationFrame não depende desse status.
   useLayoutEffect(() => {
     autoGrow();
-    if (typeof document !== 'undefined' && document.fonts?.status !== 'loaded') {
-      document.fonts?.ready?.then(autoGrow);
-    }
+    const raf = requestAnimationFrame(autoGrow);
+    document.fonts?.ready?.then(autoGrow);
+    return () => cancelAnimationFrame(raf);
   }, [value, autoGrow]);
 
   return (
