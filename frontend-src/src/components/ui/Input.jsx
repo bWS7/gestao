@@ -1,4 +1,4 @@
-import { forwardRef, useRef, useLayoutEffect, useCallback } from 'react';
+import { forwardRef, useRef, useLayoutEffect, useEffect, useCallback } from 'react';
 import { ChevronDown } from 'lucide-react';
 
 export const Input = forwardRef(function Input({ label, error, className = '', ...props }, ref) {
@@ -58,6 +58,17 @@ export const Textarea = forwardRef(function Textarea({ label, error, className =
     document.fonts?.ready?.then(autoGrow);
     return () => cancelAnimationFrame(raf);
   }, [value, autoGrow]);
+
+  // Reage a qualquer mudança real de largura do próprio campo (ex.: uma
+  // tabela vizinha ainda ajustando a largura das colunas em mais de um
+  // reflow) — mais robusto que contar frames, que às vezes não bastava.
+  useEffect(() => {
+    const el = innerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => autoGrow());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [autoGrow]);
 
   return (
     <div className="flex flex-col gap-1.5">

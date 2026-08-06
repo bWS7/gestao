@@ -1,4 +1,4 @@
-import { useRef, useLayoutEffect, useCallback } from 'react';
+import { useRef, useLayoutEffect, useEffect, useCallback } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Input, Textarea, Select } from '../ui/Input';
 import { CHECKLIST_STAND_ITENS, emptyChecklistEmpreendimento,
@@ -70,17 +70,25 @@ function AutoTextareaCell({ className = '', value, onChange, ...props }) {
   }, []);
   useLayoutEffect(() => {
     grow();
-    // Remedição no próximo paint, sempre — document.fonts.status já pode
-    // reportar 'loaded' antes da fonte usada NESTE textarea específico
-    // realmente refletir no layout (foi o que causava a caixa ficar baixa
-    // demais de forma intermitente: a 1ª medição, com a fonte de fallback
-    // mais estreita, "cabia" menos linhas do que o necessário). requestAnimationFrame
-    // não depende desse status e sempre confere depois que o navegador
-    // termina de assentar o layout real.
     const raf = requestAnimationFrame(grow);
     document.fonts?.ready?.then(grow);
     return () => cancelAnimationFrame(raf);
   }, [value, grow]);
+  // Tabela com largura automática (5 colunas de tipos bem diferentes: select,
+  // texto curto, texto longo, select, data) — o navegador pode levar mais de
+  // um frame pra decidir a largura final de cada coluna, então a medição de
+  // altura (que depende da largura, já que é ela que decide onde a linha
+  // quebra) às vezes ainda saía baixa demais mesmo com o requestAnimationFrame
+  // acima (só cobre 1 frame; a tabela às vezes precisa de mais). ResizeObserver
+  // não depende de contar frames: reage sempre que a largura da própria célula
+  // muda de verdade, não importa quantos reflows a tabela precisou até lá.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => grow());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [grow]);
   return (
     <textarea
       ref={ref}
