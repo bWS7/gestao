@@ -44,14 +44,20 @@ Aguarde o build completar. A URL pública será gerada automaticamente.
 
 ## 🔐 Acesso Inicial
 
-Após o primeiro deploy, o sistema cria automaticamente:
+O admin inicial não vem mais fixo no código. Defina no serviço (Railway → Variables)
+antes do primeiro deploy:
 
-| Campo | Valor |
-|-------|-------|
-| **Email** | `admin@sistema.com` |
-| **Senha** | `admin123` |
+```
+SEED_ADMIN_EMAIL=seu-email@dominio.com
+SEED_ADMIN_PASSWORD=uma-senha-forte
+SEED_ADMIN_NAME=Seu Nome
+```
 
-> ⚠️ **Troque a senha do admin imediatamente após o primeiro acesso!**
+Sem essas variáveis, nenhum usuário admin é criado automaticamente — nesse caso,
+promova um usuário existente a admin diretamente no banco.
+
+> ⚠️ Depois do primeiro acesso, troque a senha pela tela de perfil e remova
+> `SEED_ADMIN_PASSWORD` das variáveis de ambiente.
 
 ---
 

@@ -34,12 +34,21 @@ def _get_database_url():
     )
 
 
+def _resolve_secret(env_name):
+    value = os.environ.get(env_name)
+    if not value:
+        raise RuntimeError(
+            f'{env_name} nao configurada. Defina uma variavel de ambiente forte antes de iniciar a aplicacao.'
+        )
+    return value
+
+
 def create_app():
     app = Flask(__name__, static_folder='../frontend/static', static_url_path='/static')
 
     # Config
-    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-mude-em-producao')
-    app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'jwt-secret-mude-em-producao')
+    app.config['SECRET_KEY'] = _resolve_secret('SECRET_KEY')
+    app.config['JWT_SECRET_KEY'] = _resolve_secret('JWT_SECRET_KEY')
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = False
     app.config['UPLOAD_FOLDER'] = os.path.join(os.path.abspath(os.path.dirname(__file__)), '..', 'uploads')
 
@@ -50,7 +59,10 @@ def create_app():
     db.init_app(app)
     jwt.init_app(app)
     migrate.init_app(app, db)
-    CORS(app, origins='*', supports_credentials=True)
+    # Auth usa Bearer token (Authorization header), nao cookies de sessao,
+    # entao nao ha necessidade de supports_credentials=True aqui — combinar
+    # isso com origins='*' e uma configuracao invalida/insegura de CORS.
+    CORS(app, origins='*')
 
     # Blueprints
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -164,16 +176,20 @@ def _seed_initial_data():
         db.session.rollback()
         print(f"Erro ao adicionar coluna foto_url: {e}")
     
-    # Novo Admin Master
-    admin_email = 'bruno.alves@sousaaraujo.com.br'
-    if not Usuario.query.filter_by(email=admin_email).first():
+    # Admin inicial, controlado por variaveis de ambiente. Sem elas configuradas,
+    # nenhum admin e criado automaticamente (evita credencial hardcoded no codigo).
+    admin_email = (os.environ.get('SEED_ADMIN_EMAIL') or '').strip().lower()
+    admin_password = os.environ.get('SEED_ADMIN_PASSWORD') or ''
+    admin_name = (os.environ.get('SEED_ADMIN_NAME') or 'Admin').strip()
+
+    if admin_email and admin_password and not Usuario.query.filter_by(email=admin_email).first():
         admin = Usuario(
-            nome='Bruno Alves',
+            nome=admin_name,
             email=admin_email,
             perfil='admin',
             status='ativo'
         )
-        admin.set_senha('admin123')
+        admin.set_senha(admin_password)
         db.session.add(admin)
         db.session.commit()
         print(f"Usuário admin {admin_email} garantido.")
